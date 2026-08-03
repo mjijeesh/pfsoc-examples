@@ -1,0 +1,114 @@
+# ==============================================================================
+# Advanced Multi-Directory PolarFire SoC Makefile
+# Supports Modular Application & Platform Driver Layouts
+# ==============================================================================
+
+CROSS_COMPILE ?= riscv-none-elf-
+
+CC      := $(CROSS_COMPILE)gcc
+AS      := $(CROSS_COMPILE)as
+LD      := $(CROSS_COMPILE)ld
+OBJCOPY := $(CROSS_COMPILE)objcopy
+OBJDUMP := $(CROSS_COMPILE)objdump
+SIZE    := $(CROSS_COMPILE)size
+
+TARGET    := pfsoc_app
+BUILD_DIR := build
+LINKER_SCRIPT := mpfs-lim.ld
+
+# 1. Core Target Architecture Flags
+#ARCH_FLAGS := -march=rv64imac -mabi=lp64 -mcmodel=medany
+
+ARCH_FLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
+
+# 2. Dynamic Source Code and Include Directory Discovery
+# Automatically finds all source directories inside platform/drivers/
+DRIVER_DIRS := $(wildcard platform/drivers/*)
+
+BOARD_DIR    := boards/mpfs-discovery-kit
+INCLUDE_DIRS += $(BOARD_DIR)/platform_config/lim-debug
+
+
+# Compile a clean explicit map of all Include Paths
+INCLUDE_DIRS += application \
+                platform \
+				$(BOARD_DIR) \
+                $(DRIVER_DIRS)
+
+INC_FLAGS := $(addprefix -I, $(INCLUDE_DIRS))
+
+# Gather all source files dynamically across the workspace tree
+SRCS_C   := $(wildcard application/src/*.c) \
+            $(wildcard platform/drivers/*/*.c)\
+			$(wildcard platform/mpfs_hal/startup_gcc/*.c)\
+			$(wildcard platform/mpfs_hal/common/*.c)\
+			$(wildcard platform/mpfs_hal/common/nwc/*.c)\
+			$(wildcard platform/hal/*.c)
+
+SRCS_ASM := $(wildcard platform/hal/*.S)\
+			$(wildcard platform/mpfs_hal/startup_gcc/*.S)\
+
+# 3. Object Mapping (Preserves folder structures inside the build folder)
+OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRCS_C)) \
+        $(patsubst %.S, $(BUILD_DIR)/%.o, $(SRCS_ASM))
+
+# 4. Compilation Flag Suites
+CFLAGS := $(ARCH_FLAGS) \
+          -Wall -Wextra -O2 \
+          -ffreestanding \
+          -ffunction-sections -fdata-sections \
+          $(INC_FLAGS)
+
+#LDFLAGS += -Wl,--no-warn-rwx-segments
+
+LDFLAGS = $(ARCH_FLAGS) \
+           -nostartfiles \
+           -Wl,--gc-sections \
+           -T $(LINKER_SCRIPT) \
+           -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
+LDFLAGS += -Wl,--no-warn-rwx-segments
+
+# ==============================================================================
+# Core Automation Targets
+# ==============================================================================
+
+.PHONY: all clean show_size
+
+all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex show_size
+
+# Final Link Strategy
+$(BUILD_DIR)/$(TARGET).elf: $(OBJS)
+	@echo " [LD]  Linking complex payload: $@"
+	@$(CC) $(OBJS) $(LDFLAGS) -o $@
+
+# Pattern Compilation Rule for C Source Trees (Auto-creates missing build trees)
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo " [CC]  Compiling module: $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Pattern Compilation Rule for Low Level Assembly Components
+$(BUILD_DIR)/%.o: %.S
+	@mkdir -p $(dir $@)
+	@echo " [AS]  Assembling module: $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Binary Extraction Mapping
+$(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
+	@echo " [OBJ] Extracting raw application image: $@"
+	@$(OBJCOPY) -O binary $< $@
+
+# Intel Hex Parsing Generator
+$(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
+	@echo " [OBJ] Compiling target flash image: $@"
+	@$(OBJCOPY) -O ihex $< $@
+
+show_size: $(BUILD_DIR)/$(TARGET).elf
+	@echo ""
+	@echo "=== Application Section Allocation Projections ==="
+	@$(SIZE) $<
+	@echo "=================================================="
+
+clean:
+	@echo " Removing execution build trees..."
+	@rm -rf $(BUILD_DIR)
