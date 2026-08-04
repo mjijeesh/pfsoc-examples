@@ -28,7 +28,6 @@ static void cmd_go(int argc, char **argv);
 static void cmd_xmodem(int argc, char **argv);
 static void cmd_serialboot(int argc, char **argv);
 
-// Add to command_table in cli.c:
 static const struct command command_table[] = {
     { "help",       cmd_help,       "Show available commands" },
     { "ident",      cmd_ident,      "Display system identification" },
@@ -38,22 +37,21 @@ static const struct command command_table[] = {
     { "xmodem",     cmd_xmodem,     "Upload binary via XMODEM: xmodem <hex_addr>" },
     { "serialboot", cmd_serialboot, "LiteX Serial Boot mode" },
 };
+
 #define NUM_COMMANDS (sizeof(command_table) / sizeof(struct command))
 
-// Command handler wrapper
 static void cmd_serialboot(int argc, char **argv)
 {
     (void)argc; (void)argv;
     serialboot();
 }
 
-
 static void cmd_help(int argc, char **argv)
 {
     (void)argc; (void)argv;
     printf("\r\nAvailable Commands:\r\n");
     for (size_t i = 0; i < NUM_COMMANDS; i++) {
-        printf("  %-8s - %s\r\n", command_table[i].name, command_table[i].help);
+        printf("  %-10s - %s\r\n", command_table[i].name, command_table[i].help);
     }
     printf("\r\n");
 }
@@ -114,7 +112,6 @@ static void cmd_go(int argc, char **argv)
 
     uart_sync();
 
-    // Call destination function pointer
     entry_func_t entry = (entry_func_t)addr;
     entry();
 }
@@ -137,6 +134,7 @@ void cli_init(void)
     printf("         LiteX BIOS for PolarFire SoC             \r\n");
     printf("==================================================\r\n");
     printf("Type 'help' for a list of available commands.\r\n\r\n");
+    fflush(stdout); // Force banner output to UART
 }
 
 void cli_run(void)
@@ -145,29 +143,43 @@ void cli_run(void)
     char *argv[MAX_ARGS];
 
     while (1) {
+        // 1. Print prompt and IMMEDIATELY flush to UART
         printf("litex> ");
-        if (readline(line, sizeof(line)) > 0) {
-            int argc = 0;
-            char *token = strtok(line, " ");
+        fflush(stdout);
 
-            while (token != NULL && argc < MAX_ARGS) {
-                argv[argc++] = token;
-                token = strtok(NULL, " ");
+        // 2. Read user input
+        int len = readline(line, sizeof(line));
+
+        // 3. If line is empty (user just pressed Enter), loop back to reprint prompt
+        if (len <= 0) {
+            continue;
+        }
+
+        // 4. Tokenize arguments
+        int argc = 0;
+        char *token = strtok(line, " ");
+
+        while (token != NULL && argc < MAX_ARGS) {
+            argv[argc++] = token;
+            token = strtok(NULL, " ");
+        }
+
+        // 5. Find and execute matching command
+        if (argc > 0) {
+            int found = 0;
+            for (size_t i = 0; i < NUM_COMMANDS; i++) {
+                if (strcmp(argv[0], command_table[i].name) == 0) {
+                    command_table[i].func(argc, argv);
+                    found = 1;
+                    break;
+                }
             }
-
-            if (argc > 0) {
-                int found = 0;
-                for (size_t i = 0; i < NUM_COMMANDS; i++) {
-                    if (strcmp(argv[0], command_table[i].name) == 0) {
-                        command_table[i].func(argc, argv);
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    printf("Command '%s' not recognized. Type 'help'.\r\n", argv[0]);
-                }
+            if (!found) {
+                printf("Command '%s' not recognized. Type 'help'.\r\n", argv[0]);
             }
         }
+
+        // 6. Flush command output before loop restarts
+        fflush(stdout);
     }
 }

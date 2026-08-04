@@ -1,0 +1,110 @@
+# ==============================================================================
+# Simplified PolarFire SoC Application Makefile
+# Derived from Microchip HSS Architecture Parameters
+# ==============================================================================
+
+# 1. Toolchain Definition
+# Adjust CROSS_COMPILE to match your local installation path if needed
+CROSS_COMPILE ?= riscv64-unknown-elf-
+
+CC      := $(CROSS_COMPILE)gcc
+AS      := $(CROSS_COMPILE)as
+LD      := $(CROSS_COMPILE)ld
+OBJCOPY := $(CROSS_COMPILE)objcopy
+OBJDUMP := $(CROSS_COMPILE)objdump
+SIZE    := $(CROSS_COMPILE)size
+
+# 2. Project Layout Configurations
+TARGET  := pfsoc_app
+BUILD_DIR := build
+SRC_DIR   := src
+INC_DIR   := include
+LINKER_SCRIPT := linker.ld
+
+# 3. Target Core Architecture Flags (Crucial for PolarFire SoC)
+# PolarFire SoC contains E51 & U54 cores supporting the RISC-V 64-bit ISA.
+# -mcmodel=medany is mandatory to handle long jumps across sparse memory layouts.
+ARCH_FLAGS := -march=rv64imac -mabi=lp64 -mcmodel=medany
+
+# 4. Compiler & Linker Flags
+CFLAGS := $(ARCH_FLAGS) \
+          -Wall -Wextra -O2 \
+          -ffreestanding \
+          -ffunction-sections -fdata-sections \
+          -I$(INC_DIR)
+
+ASFLAGS := $(ARCH_FLAGS)
+
+LDFLAGS := $(ARCH_FLAGS) \
+           -nostartfiles \
+           -Wl,--gc-sections \
+           -T $(LINKER_SCRIPT) \
+           -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
+
+# 5. File Discoveries
+# Automatically locate all C and Assembly source files inside the 'src' directory
+SRCS_C   := $(wildcard $(SRC_DIR)/*.c)
+SRCS_ASM := $(wildcard $(SRC_DIR)/*.S)
+
+# Map source file paths to matching target build object files
+OBJS := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS_C)) \
+        $(patsubst $(SRC_DIR)/%.S, $(BUILD_DIR)/%.o, $(SRCS_ASM))
+
+# ==============================================================================
+# Build Target Automation Rules
+# ==============================================================================
+
+.PHONY: all clean directories show_size program
+
+# Default top-level target: builds ELF, binary file, Intel Hex, and prints size metrics
+all: directories $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex show_size
+
+# Rule to dynamically construct object build directory safely
+directories:
+	@mkdir -p $(BUILD_DIR)
+
+# Link Rule to produce final executable ELF
+$(BUILD_DIR)/$(TARGET).elf: $(OBJS)
+	@echo " [LD]  Linking output: $@"
+	@$(CC) $(OBJS) $(LDFLAGS) -o $@
+
+# Compile Rule: Parse C files into compiled translation object artifacts
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo " [CC]  Compiling file: $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile Rule: Parse low-level Assembly vector layout scripts
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
+	@echo " [AS]  Assembling file: $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Binary generation target (Great for UART/YMODEM transmission payload schemes)
+$(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
+	@echo " [OBJ] Extracting raw binary image: $@"
+	@$(OBJCOPY) -O binary $< $@
+
+# Intel Hex file generation target (Required for Microchip eNVM flashing clients)
+$(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
+	@echo " [OBJ] Generating Intel HEX image: $@"
+	@$(OBJCOPY) -O ihex $< $@
+
+# Output static size telemetry profiling data to terminal 
+show_size: $(BUILD_DIR)/$(TARGET).elf
+	@echo ""
+	@echo "=== Memory Utilization Footprint ==="
+	@$(SIZE) $<
+	@echo "===================================="
+
+# Wipe away build generation assets cleanly
+clean:
+	@echo " Cleaning build output artifacts..."
+	@rm -rf $(BUILD_DIR)
+
+# Optional: Automatic eNVM flash programming via Microchip FlashPro/Libero Tool
+# Requires environment variables FPGENPROG to point to Libero installation binaries
+program: $(BUILD_DIR)/$(TARGET).hex
+	@if [ -z "$$FPGENPROG" ]; then \
+		echo "ERROR: Environment variable FPGENPROG is undefined. Point it to Libero's 'fpgenprog' binary."; \
+		exit 1; \
+	fi
+	$$FPGENPROG -b mode1 -c envm -f $<

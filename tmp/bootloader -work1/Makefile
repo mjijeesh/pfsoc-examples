@@ -1,0 +1,193 @@
+# ==============================================================================
+# Advanced Multi-Directory PolarFire SoC Makefile
+# Supports Memory Targets: eNVM, LIM, DDR
+# ==============================================================================
+
+CROSS_COMPILE ?= riscv-none-elf-
+
+CC      := $(CROSS_COMPILE)gcc
+AS      := $(CROSS_COMPILE)as
+LD      := $(CROSS_COMPILE)ld
+OBJCOPY := $(CROSS_COMPILE)objcopy
+OBJDUMP := $(CROSS_COMPILE)objdump
+SIZE    := $(CROSS_COMPILE)size
+GDB     := $(CROSS_COMPILE)gdb
+OPENOCD := openocd
+
+TARGET  := pfsoc_modular_app
+BOARD_DIR := boards/mpfs-discovery-kit
+
+# ------------------------------------------------------------------------------
+# Debugger Configuration
+# ------------------------------------------------------------------------------
+# Adjust OPENOCD_CFG if using a standalone JTAG adapter instead of the onboard FlashPro
+OPENOCD_CFG  ?= -f board/microsemi-riscv.cfg
+GDB_PORT     ?= 3333
+
+
+# ------------------------------------------------------------------------------
+# 1. Dynamic Memory Target Configuration Switcher
+# ------------------------------------------------------------------------------
+# Default target if plain 'make' is called
+MEM_TARGET ?= lim
+
+ifeq ($(MEM_TARGET),envm)
+    BUILD_DIR     := build/envm
+    LINKER_SCRIPT := linker/mpfs-envm.ld
+    CONFIG_DIR    := envm-release
+else ifeq ($(MEM_TARGET),ddr) # <-- Fixed typo here
+    BUILD_DIR     := build/ddr
+    LINKER_SCRIPT := linker/mpfs-ddr.ld
+    CONFIG_DIR    := ddr-release
+else ifeq ($(MEM_TARGET),envm-lim)
+    BUILD_DIR     := build/ddr
+    LINKER_SCRIPT := linker/mpfs-envm-scratchpad.ld
+    CONFIG_DIR    := envm-release
+else
+    # Defaulting to LIM
+    BUILD_DIR     := build/lim
+    LINKER_SCRIPT := linker/mpfs-lim.ld
+    CONFIG_DIR    := lim-debug
+endif
+
+# ------------------------------------------------------------------------------
+# 2. Core Target Architecture Flags
+# ------------------------------------------------------------------------------
+ARCH_FLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
+
+# ------------------------------------------------------------------------------
+# 3. Dynamic Source Code and Include Directory Discovery
+# ------------------------------------------------------------------------------
+DRIVER_DIRS := $(wildcard platform/drivers/*)
+
+# Dynamically route the platform configuration path depending on memory target
+INCLUDE_DIRS += $(BOARD_DIR)/platform_config/$(CONFIG_DIR)
+
+INCLUDE_DIRS += application \
+                platform \
+                $(BOARD_DIR) \
+                $(DRIVER_DIRS)
+
+INC_FLAGS := $(addprefix -I, $(INCLUDE_DIRS))
+
+SRCS_C   := $(wildcard application/src/*.c) \
+            $(wildcard platform/drivers/*/*.c)\
+            $(wildcard platform/mpfs_hal/startup_gcc/*.c)\
+            $(wildcard platform/mpfs_hal/common/*.c)\
+            $(wildcard platform/mpfs_hal/common/nwc/*.c)\
+            $(wildcard platform/hal/*.c)
+
+SRCS_ASM := $(wildcard platform/hal/*.S)\
+            $(wildcard platform/mpfs_hal/startup_gcc/*.S)
+
+# Object Mapping (Isolated within their respective build subdirectories)
+OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRCS_C)) \
+        $(patsubst %.S, $(BUILD_DIR)/%.o, $(SRCS_ASM))
+
+# ------------------------------------------------------------------------------
+# 4. Compilation Flag Suites
+# ------------------------------------------------------------------------------
+CFLAGS := $(ARCH_FLAGS) \
+          -Wall -Wextra -O2 \
+          -ffreestanding \
+          -ffunction-sections -fdata-sections \
+          $(INC_FLAGS)
+
+LDFLAGS = $(ARCH_FLAGS) \
+          -nostartfiles \
+          -Wl,--gc-sections \
+          -T $(LINKER_SCRIPT) \
+          -Wl,-Map=$(BUILD_DIR)/$(TARGET).map \
+          -Wl,--no-warn-rwx-segments
+
+# ==============================================================================
+# Core Automation Targets
+# ==============================================================================
+
+.PHONY: all clean show_size lim envm ddr
+
+# High-Level Explicit Target Selectors
+lim:
+	@echo "=================================================="
+	@echo " Building Target Application for LIM Workspace Memory"
+	@echo "=================================================="
+	@$(MAKE) MEM_TARGET=lim all
+
+envm:
+	@echo "=================================================="
+	@echo " Building Target Application for eNVM Non-Volatile Memory"
+	@echo "=================================================="
+	@$(MAKE) MEM_TARGET=envm all
+envm-lim:
+	@echo "=================================================="
+	@echo " Building Target Application for eNVM Non-Volatile Memory"
+	@echo "=================================================="
+	@$(MAKE) MEM_TARGET=envm-lim all
+
+ddr:
+	@echo "=================================================="
+	@echo " Building Target Application for Volatile DDR Controller Space"
+	@echo "=================================================="
+	@$(MAKE) MEM_TARGET=ddr all
+
+# Internal build mechanism
+all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex show_size
+
+$(BUILD_DIR)/$(TARGET).elf: $(OBJS)
+	@echo " [LD]  Linking complex payload: $@"
+	@$(CC) $(OBJS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo " [CC]  Compiling module: $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/%.o: %.S
+	@mkdir -p $(dir $@)
+	@echo " [AS]  Assembling module: $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
+	@echo " [OBJ] Extracting raw application image: $@"
+	@$(OBJCOPY) -O binary $< $@
+
+$(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
+	@echo " [OBJ] Compiling target flash image: $@"
+	@$(OBJCOPY) -O ihex $< $@
+
+show_size: $(BUILD_DIR)/$(TARGET).elf
+	@echo ""
+	@echo "=== Application Section Allocation Projections [$(MEM_TARGET)] ==="
+	@$(SIZE) $<
+	@echo "=================================================="
+
+clean:
+	@echo " Removing all execution build trees..."
+	@rm -rf build
+
+# ==============================================================================
+# Debugging Automation Targets
+# ==============================================================================
+
+# Target 1: Start OpenOCD Server Connection
+openocd:
+	@echo "=================================================="
+	@echo " Launching OpenOCD Server for PolarFire SoC..."
+	@echo " Press Ctrl+C to terminate connection server."
+	@echo "=================================================="
+	$(OPENOCD) $(OPENOCD_CFG)
+
+# Target 2: Start GDB Client and Connect Automatically
+debug:
+	@if [ ! -f $(BUILD_DIR)/$(TARGET).elf ]; then \
+		echo "ERROR: Executable not found for [$(MEM_TARGET)] memory context. Run 'make $(MEM_TARGET)' first."; \
+		exit 1; \
+	fi
+	@echo "=================================================="
+	@echo " Starting GDB Session for: $(BUILD_DIR)/$(TARGET).elf"
+	@echo " Target Architecture Sync context: $(MEM_TARGET)"
+	@echo "=================================================="
+	$(GDB) $(BUILD_DIR)/$(TARGET).elf \
+		-ex "target remote localhost:$(GDB_PORT)" \
+		-ex "monitor reset halt" \
+		-ex "load"
