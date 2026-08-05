@@ -15,8 +15,22 @@ OBJDUMP := $(CROSS_COMPILE)objdump
 SIZE    := $(CROSS_COMPILE)size
 GDB     := $(CROSS_COMPILE)gdb
 
-OPENOCD ?= openocd
+
 TARGET  := pfsoc_app
+
+
+# ==============================================================================
+# OS Detection & OpenOCD Executable Path Configuration
+# ==============================================================================
+ifeq ($(OS),Windows_NT)
+    # Windows default path (adjust to your SoftConsole version or binary location)
+    OPENOCD ?= C:/Microchip/SoftConsole-v2022.2-RISC-V-747/openocd/bin/openocd.exe
+else
+    # Linux default path (adjust to your SoftConsole installation path or system binary)
+    OPENOCD ?= /opt/microchip/SoftConsole/SoftConsole-v2022/openocd/bin/openocd
+endif
+
+
 
 # ------------------------------------------------------------------------------
 # Dynamic Board Configuration & Validation
