@@ -27,7 +27,7 @@ extern void hw_info_handler(int nb_params, char **params);
 
 
 /* SPI Flash Shell Command Prototypes */
-extern void spiflashboot_handler(int nb_params, char **params);
+extern void flashboot_handler(int nb_params, char **params);
 extern void flash_write_handler(int nb_params, char **params);
 extern void flash_erase_range_handler(int nb_params, char **params);
 extern void flash_read_handler(int nb_params, char **params);
@@ -51,7 +51,7 @@ static const struct command_struct command_table[] = {
     { serialboot_handler,  "serialboot", "Boot from Serial (SFL)",              BOOT_CMDS },
 
     { flashwrite_handler,       "flashwrite",        "Upload binary to SPI Flash over SFL",                 BOOT_CMDS },
-    { spiflashboot_handler,     "spiflashboot",      "Boot from SPI Flash: spiflashboot [offset] [ram_addr] [len]", BOOT_CMDS },
+    { flashboot_handler,        "flashboot",         "Boot FBI image from SPI Flash: flashboot [offset] [ram_addr]", BOOT_CMDS },
     { flash_write_handler,      "flash_write",       "Write RAM to Flash: flash_write <offset> <ram_addr> [count]", BOOT_CMDS },
     { flash_erase_range_handler,"flash_erase_range", "Erase Flash range: flash_erase_range <offset> <count>",      BOOT_CMDS },
     { flash_read_handler,       "flash_read",        "Read Flash : flash_read <offset>  [count]",    BOOT_CMDS },
