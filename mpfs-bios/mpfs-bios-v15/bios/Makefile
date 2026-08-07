@@ -23,10 +23,16 @@ CFLAGS += -DBUILD_TIMESTAMP="\"$(BUILD_TIMESTAMP)\""
 
 
 # To use FPGA CoreSPI IP:
-CFLAGS += -DUSE_CORE_SPI
-
+#CFLAGS += -DUSE_CORE_SPI
 # OR to use Hard MSS SPI:
 # CFLAGS += -DUSE_MSS_SPI
+
+
+ifeq ($(BOARD),mpfs-icicle-kit)
+    CFLAGS += -DUSE_CORE_SPI -DCORESPI_BASE_ADDR=0x40000000UL
+else
+    CFLAGS += -DUSE_MSS_SPI
+endif
 
 
 

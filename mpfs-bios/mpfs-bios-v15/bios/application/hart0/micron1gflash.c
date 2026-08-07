@@ -1,5 +1,5 @@
 /***************************************************************************//**
- * Micron 1Gb MT25QL01GBBB SPI Flash Driver for Microchip PolarFire SoC (MPFS)
+ * Micron 1Gb MT25QL01GBBB SPI Flash Driver Implementation for MPFS
  *******************************************************************************/
 
 #include <stdio.h>
@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "micron1gflash.h"
+#include "spi_flash.h"
 #include "mpfs_hal/mss_hal.h"
 
 /* Micron MT25QL01GBBB Command Opcodes */
@@ -198,6 +199,20 @@ void FLASH_erase_64k_block(uint32_t address)
     hal_spi_deselect();
 }
 
+void FLASH_erase_range(uint32_t address, size_t count)
+{
+    if (count == 0) return;
+
+    uint32_t start_addr = address;
+    uint32_t end_addr   = address + (uint32_t)count;
+    uint32_t block_addr = start_addr & ~(0xFFFFUL);
+
+    while (block_addr < end_addr) {
+        FLASH_erase_64k_block(block_addr);
+        block_addr += 0x10000UL;
+    }
+}
+
 void FLASH_die_256MB_erase(uint8_t die_number)
 {
     uint8_t cmd_buffer[5];
@@ -262,3 +277,45 @@ void FLASH_program(uint32_t address, uint8_t *write_buffer, size_t size_in_bytes
     hal_spi_transfer(cmd_buffer, 1, NULL, 0);
     hal_spi_deselect();
 }
+
+/*******************************************************************************
+ * Driver Operations Export Table
+ *******************************************************************************/
+static int micron_init_wrapper(void)
+{
+    FLASH_init();
+    return 0;
+}
+
+static int micron_read_id_wrapper(uint8_t *mfr_id, uint8_t *dev_id)
+{
+    FLASH_read_device_id(mfr_id, dev_id);
+    return 0;
+}
+
+static int micron_read_wrapper(uint32_t offset, uint8_t *buf, size_t len)
+{
+    FLASH_read(offset, buf, len);
+    return 0;
+}
+
+static int micron_write_wrapper(uint32_t offset, const uint8_t *buf, size_t len)
+{
+    FLASH_program(offset, (uint8_t *)buf, len);
+    return 0;
+}
+
+static int micron_erase_wrapper(uint32_t offset, size_t len)
+{
+    FLASH_erase_range(offset, len);
+    return 0;
+}
+
+const struct spi_flash_ops micron1g_flash_ops = {
+    .name    = "Micron MT25QL01GBBB (1Gb / 128MB)",
+    .init    = micron_init_wrapper,
+    .read_id = micron_read_id_wrapper,
+    .read    = micron_read_wrapper,
+    .write   = micron_write_wrapper,
+    .erase   = micron_erase_wrapper
+};

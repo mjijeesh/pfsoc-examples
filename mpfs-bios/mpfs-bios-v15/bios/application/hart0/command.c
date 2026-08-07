@@ -25,9 +25,14 @@ extern void mem_test_handler(int nb_params, char **params);
 extern void mem_cmp_handler(int nb_params, char **params);
 extern void hw_info_handler(int nb_params, char **params);
 
-/* Flash Commands */
-extern void flash_test_handler(int nb_params, char **params);
+
+/* SPI Flash Shell Command Prototypes */
 extern void spiflashboot_handler(int nb_params, char **params);
+extern void flash_write_handler(int nb_params, char **params);
+extern void flash_erase_range_handler(int nb_params, char **params);
+extern void flash_read_handler(int nb_params, char **params);
+extern void flash_copy_handler(int nb_params, char **params);
+
 
 /* Primary command lookup table */
 static const struct command_struct command_table[] = {
@@ -40,8 +45,13 @@ static const struct command_struct command_table[] = {
     // Boot Commands
     { boot_handler,        "boot",       "Boot from Memory: boot <addr> [r1]",  BOOT_CMDS },
     { serialboot_handler,  "serialboot", "Boot from Serial (SFL)",              BOOT_CMDS },
-    { spiflashboot_handler,"spiflashboot", "Boot from SPI Flash: spiflashboot [flash_addr] [ram_addr] [len]", BOOT_CMDS },
-    { flash_test_handler,  "flash_test",   "Test Flash ID & read: flash_test [flash_addr] [len]", BOOT_CMDS },
+   
+    { spiflashboot_handler,     "spiflashboot",      "Boot from SPI Flash: spiflashboot [offset] [ram_addr] [len]", BOOT_CMDS },
+    { flash_write_handler,      "flash_write",       "Write RAM to Flash: flash_write <offset> <ram_addr> [count]", BOOT_CMDS },
+    { flash_erase_range_handler,"flash_erase_range", "Erase Flash range: flash_erase_range <offset> <count>",      BOOT_CMDS },
+    { flash_read_handler,       "flash_read",        "Read Flash : flash_read <offset>  [count]",    BOOT_CMDS },
+    { flash_copy_handler,       "flash_copy",        "Copy Flash to RAM: flash_copy <offset> <ram_addr> [count]",    BOOT_CMDS },
+
 
     // Memory Commands
     { mem_read_handler,    "mem_read",   "Read memory: mem_read <addr> [len]",  MEM_CMDS },
@@ -76,7 +86,7 @@ struct command_struct *command_dispatcher(char *command, int nb_params, char **p
  */
 void command_help_show(void)
 {
-    printf("\nLiteX BIOS, available commands:\n\n");
+    printf("\n MPFS BIOS, available commands:\n\n");
     const char *group_names[] = { "System Commands", "Boot Commands", "Memory Commands" };
 
     for (int g = 0; g < NB_OF_GROUPS; g++) {
