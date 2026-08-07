@@ -1,4 +1,13 @@
-# PolarFire SoC Baremetal BIOS v14
+# PolarFire SoC Baremetal BIOS v16
+
+
+
+##### What is new V16
+
+1. Implemented teh flashboot to boot from spiflash file
+2. flashwrite: uplaod a app.fbi fiel to the spiflash location.
+3. flash helper functions.
+4. tested on icicle kit.
 
 
 ##### What is new V14
