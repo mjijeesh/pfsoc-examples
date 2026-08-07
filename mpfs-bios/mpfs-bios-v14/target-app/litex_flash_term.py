@@ -1,0 +1,928 @@
+#!/usr/bin/env python3
+
+#
+# This file is part of LiteX.
+#
+# Copyright (c) 2015-2020 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2015 Sebastien Bourdeauducq <sb@m-labs.hk>
+# Copyright (c) 2016 whitequark <whitequark@whitequark.org>
+# Copyright (c) 2026 chiralitie <chiralitie@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause
+
+import sys
+import signal
+import os
+import time
+import serial
+import threading
+import argparse
+import json
+import socket
+from collections import deque
+
+# Console ------------------------------------------------------------------------------------------
+
+if sys.platform == "win32":
+    import ctypes
+    import msvcrt
+    class Console:
+        def configure(self):
+            # https://stackoverflow.com/a/36760881
+            # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+
+        def unconfigure(self):
+            pass
+
+        def getkey(self):
+            return msvcrt.getch()
+
+        # getch doesn't return Virtual Keycodes, but rather
+        # PS/2 Scan Codes. Keycodes starting with 0xE0 are
+        # worth handling.
+        def escape_char(self, b):
+            return b == b"\xe0"
+
+        def handle_escape(self, b):
+            return {
+                b"H" : b"\x1b[A",  # Up
+                b"P" : b"\x1b[B",  # Down
+                b"K" : b"\x1b[D",  # Left
+                b"M" : b"\x1b[C",  # Right
+                b"G" : b"\x1b[H",  # Home
+                b"O" : b"\x1b[F",  # End
+                b"R" : b"\x1b[2~", # Insert
+                b"S" : b"\x1b[3~", # Delete
+            }.get(b, None) # TODO: Handle ESC? Others?
+
+else:
+    import termios
+    import pty
+    class Console:
+        def __init__(self):
+            self.fd = sys.stdin.fileno()
+            self.default_settings = termios.tcgetattr(self.fd)
+
+        def configure(self):
+            settings = termios.tcgetattr(self.fd)
+            settings[3] = settings[3] & ~termios.ICANON & ~termios.ECHO
+            settings[6][termios.VMIN] = 1
+            settings[6][termios.VTIME] = 0
+            termios.tcsetattr(self.fd, termios.TCSANOW, settings)
+
+        def unconfigure(self):
+            termios.tcsetattr(self.fd, termios.TCSAFLUSH, self.default_settings)
+
+        def getkey(self):
+            return os.read(self.fd, 1)
+
+        def escape_char(self, b):
+            return False
+
+        def handle_escape(self, b):
+            return None
+
+# Crossover UART  ----------------------------------------------------------------------------------
+
+from litex import RemoteClient
+
+class CrossoverUART:
+    def __init__(self, name="uart_xover", host="localhost", base_address=None, csr_csv=None, port=1234):
+        self.bus = RemoteClient(host=host, port=port, base_address=base_address, csr_csv=csr_csv)
+        present = False
+        for k, v in self.bus.regs.d.items():
+            if f"{name}_" in k:
+                setattr(self, k.replace(f"{name}_", ""), v)
+                present = True
+        if not present:
+            raise ValueError(f"CrossoverUART {name} not present in design.")
+
+    def open(self):
+        self.bus.open()
+        self.file, self.name = pty.openpty()
+        self.alive = True
+        self.pty2crossover_thread = threading.Thread(target=self.pty2crossover, daemon=True)
+        self.crossover2pty_thread = threading.Thread(target=self.crossover2pty, daemon=True)
+        self.pty2crossover_thread.start()
+        self.crossover2pty_thread.start()
+
+    def close(self):
+        self.bus.close()
+        self.alive = False
+        self.pty2crossover_thread.join(timeout=0.1)
+        self.crossover2pty_thread.join(timeout=0.1)
+
+    def pty2crossover(self):
+        while self.alive:
+            r = os.read(self.file, 1)
+            self.rxtx.write(ord(r))
+
+    def crossover2pty(self):
+        while self.alive:
+            if self.rxfull.read():
+                length = 16
+            elif not self.rxempty.read():
+                length = 1
+            else:
+                time.sleep(1e-3)
+                continue
+            r = self.bus.read(self.rxtx.addr, length=length, burst="fixed")
+            for v in r:
+                os.write(self.file, bytes(chr(v).encode("utf-8")))
+
+# JTAG UART ----------------------------------------------------------------------------------------
+
+from litex.build.openocd import OpenOCD
+
+class JTAGUART:
+    def __init__(self, config="openocd_xc7_ft2232.cfg", port=20000, chain=1):
+        self.config = config
+        self.port   = port
+        self.chain  = chain
+
+    def open(self):
+        self.file, self.name = pty.openpty()
+        self.alive = True
+        self.jtag2tcp_thread = threading.Thread(target=self.jtag2tcp, daemon=True)
+        self.jtag2tcp_thread.start()
+        self.pty2tcp_thread  = threading.Thread(target=self.pty2tcp, daemon=True)
+        self.tcp2pty_thread  = threading.Thread(target=self.tcp2pty, daemon=True)
+        self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        connected = False
+        for _ in range(0, 50):
+            try:
+                self.tcp.connect(("localhost", self.port))
+                connected = True
+                break
+            except ConnectionRefusedError:
+                time.sleep(0.1)
+        if not connected:
+            raise ConnectionError(f"Failed to connect to OpenOCD jtagstream on port {self.port}")
+        self.pty2tcp_thread.start()
+        self.tcp2pty_thread.start()
+
+    def close(self):
+        self.alive = False
+        # Close TCP socket to unblock recv/send
+        try:
+            self.tcp.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.tcp.close()
+        except OSError:
+            pass
+        # Close PTY to unblock os.read
+        try:
+            os.close(self.file)
+        except OSError:
+            pass
+        self.jtag2tcp_thread.join(timeout=0.5)
+        self.pty2tcp_thread.join(timeout=0.5)
+        self.tcp2pty_thread.join(timeout=0.5)
+
+    def jtag2tcp(self):
+        prog = OpenOCD(self.config)
+        prog.stream(self.port, self.chain)
+
+    def pty2tcp(self):
+        try:
+            while self.alive:
+                r = os.read(self.file, 1)
+                if not r:
+                    break
+                self.tcp.send(r)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            self.alive = False
+
+    def tcp2pty(self):
+        try:
+            while self.alive:
+                r = self.tcp.recv(1)
+                if not r:
+                    break
+                os.write(self.file, bytes(r))
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            self.alive = False
+
+# Intel/Altera JTAG UART via nios2-terminal
+class Nios2Terminal():
+    def __init__(self):
+        from subprocess import Popen, PIPE
+        p = Popen("nios2-terminal", stdin=PIPE, stdout=PIPE)
+        self.p = p
+
+    def read(self):
+        return self.p.stdout.read(1)
+
+    def in_waiting(self):
+        # unfortunately p.stdout does not provide
+        # information about awaiting input
+        return False
+
+    def write(self, data):
+        if data is not None:
+            self.p.stdin.write(data)
+            try:
+                self.p.stdin.flush()
+            except BrokenPipeError:
+                print("nios2-terminal has terminated, exiting...\n")
+                sys.exit(1)
+
+    def close(self):
+        self.p.terminate()
+
+# SFL ----------------------------------------------------------------------------------------------
+
+sfl_prompt_req = b"F7:    boot from serial\n"
+sfl_prompt_ack = b"\x06"
+
+sfl_magic_req = b"sL5DdSMmkekro\n"
+sfl_magic_ack = b"z6IHG7cYDID6o\n"
+
+sfl_payload_length  = 255
+sfl_address_length  = 4
+sfl_data_length     = sfl_payload_length - sfl_address_length
+sfl_safe_data_length = 64
+sfl_default_outstanding = 8
+
+# General commands
+sfl_cmd_abort       = b"\x00"
+sfl_cmd_load        = b"\x01"
+sfl_cmd_jump        = b"\x02"
+sfl_cmd_flash       = b"\x03"  # <-- Add this line new command for flashing spi flash
+sfl_cmd_done        = b"\x04"  # <-- Add this line new command for end of transmission
+
+# Replies
+sfl_ack_success  = b"K"
+sfl_ack_crcerror = b"C"
+sfl_ack_unknown  = b"U"
+sfl_ack_error    = b"E"
+
+
+class SFLUploadError(Exception):
+    def __init__(self, message, reply=None):
+        super().__init__(message)
+        self.reply = reply
+
+
+class SFLFrame:
+    def __init__(self):
+        self.cmd = bytes()
+        self.payload = bytes()
+
+    def compute_crc(self):
+        return crc16(self.cmd + self.payload)
+
+    def encode(self):
+        packet = bytes([len(self.payload)])
+        packet += self.compute_crc().to_bytes(2, "big")
+        packet += self.cmd
+        packet += self.payload
+        return packet
+
+# CRC16 --------------------------------------------------------------------------------------------
+
+crc16_table = [
+    0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
+    0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
+    0x1231, 0x0210, 0x3273, 0x2252, 0x52B5, 0x4294, 0x72F7, 0x62D6,
+    0x9339, 0x8318, 0xB37B, 0xA35A, 0xD3BD, 0xC39C, 0xF3FF, 0xE3DE,
+    0x2462, 0x3443, 0x0420, 0x1401, 0x64E6, 0x74C7, 0x44A4, 0x5485,
+    0xA56A, 0xB54B, 0x8528, 0x9509, 0xE5EE, 0xF5CF, 0xC5AC, 0xD58D,
+    0x3653, 0x2672, 0x1611, 0x0630, 0x76D7, 0x66F6, 0x5695, 0x46B4,
+    0xB75B, 0xA77A, 0x9719, 0x8738, 0xF7DF, 0xE7FE, 0xD79D, 0xC7BC,
+    0x48C4, 0x58E5, 0x6886, 0x78A7, 0x0840, 0x1861, 0x2802, 0x3823,
+    0xC9CC, 0xD9ED, 0xE98E, 0xF9AF, 0x8948, 0x9969, 0xA90A, 0xB92B,
+    0x5AF5, 0x4AD4, 0x7AB7, 0x6A96, 0x1A71, 0x0A50, 0x3A33, 0x2A12,
+    0xDBFD, 0xCBDC, 0xFBBF, 0xEB9E, 0x9B79, 0x8B58, 0xBB3B, 0xAB1A,
+    0x6CA6, 0x7C87, 0x4CE4, 0x5CC5, 0x2C22, 0x3C03, 0x0C60, 0x1C41,
+    0xEDAE, 0xFD8F, 0xCDEC, 0xDDCD, 0xAD2A, 0xBD0B, 0x8D68, 0x9D49,
+    0x7E97, 0x6EB6, 0x5ED5, 0x4EF4, 0x3E13, 0x2E32, 0x1E51, 0x0E70,
+    0xFF9F, 0xEFBE, 0xDFDD, 0xCFFC, 0xBF1B, 0xAF3A, 0x9F59, 0x8F78,
+    0x9188, 0x81A9, 0xB1CA, 0xA1EB, 0xD10C, 0xC12D, 0xF14E, 0xE16F,
+    0x1080, 0x00A1, 0x30C2, 0x20E3, 0x5004, 0x4025, 0x7046, 0x6067,
+    0x83B9, 0x9398, 0xA3FB, 0xB3DA, 0xC33D, 0xD31C, 0xE37F, 0xF35E,
+    0x02B1, 0x1290, 0x22F3, 0x32D2, 0x4235, 0x5214, 0x6277, 0x7256,
+    0xB5EA, 0xA5CB, 0x95A8, 0x8589, 0xF56E, 0xE54F, 0xD52C, 0xC50D,
+    0x34E2, 0x24C3, 0x14A0, 0x0481, 0x7466, 0x6447, 0x5424, 0x4405,
+    0xA7DB, 0xB7FA, 0x8799, 0x97B8, 0xE75F, 0xF77E, 0xC71D, 0xD73C,
+    0x26D3, 0x36F2, 0x0691, 0x16B0, 0x6657, 0x7676, 0x4615, 0x5634,
+    0xD94C, 0xC96D, 0xF90E, 0xE92F, 0x99C8, 0x89E9, 0xB98A, 0xA9AB,
+    0x5844, 0x4865, 0x7806, 0x6827, 0x18C0, 0x08E1, 0x3882, 0x28A3,
+    0xCB7D, 0xDB5C, 0xEB3F, 0xFB1E, 0x8BF9, 0x9BD8, 0xABBB, 0xBB9A,
+    0x4A75, 0x5A54, 0x6A37, 0x7A16, 0x0AF1, 0x1AD0, 0x2AB3, 0x3A92,
+    0xFD2E, 0xED0F, 0xDD6C, 0xCD4D, 0xBDAA, 0xAD8B, 0x9DE8, 0x8DC9,
+    0x7C26, 0x6C07, 0x5C64, 0x4C45, 0x3CA2, 0x2C83, 0x1CE0, 0x0CC1,
+    0xEF1F, 0xFF3E, 0xCF5D, 0xDF7C, 0xAF9B, 0xBFBA, 0x8FD9, 0x9FF8,
+    0x6E17, 0x7E36, 0x4E55, 0x5E74, 0x2E93, 0x3EB2, 0x0ED1, 0x1EF0
+]
+
+
+def crc16(l):
+    crc = 0
+    for d in l:
+        crc = crc16_table[((crc >> 8) ^ d) & 0xff] ^ (crc << 8)
+    return crc & 0xffff
+
+# LiteXTerm ----------------------------------------------------------------------------------------
+
+class LiteXTerm:
+    def __init__(self, serial_boot, kernel_image, kernel_address, json_images, safe,no_boot=False,flash=False):
+        self.serial_boot = serial_boot
+        self.no_boot = no_boot # <-- Add this line
+        self.flash_mode = flash  # <-- Add this line to store flash intent
+
+        if kernel_image is not None and json_images is not None:
+            raise ValueError("LiteXTerm cannot use both kernel_image and json_images.")
+        self.mem_regions = {}
+        if kernel_image is not None:
+            # Default to 0x20000 flash offset if --flash is enabled without custom address
+            if flash and kernel_address == "0x40000000":
+                kernel_address = "0x20000"
+            self.mem_regions = {kernel_image: kernel_address}
+            self.boot_address = kernel_address
+
+
+        if json_images is not None:
+            f = open(json_images, "r")
+            json_dir = os.path.dirname(json_images)
+            for k, v in json.load(f).items():
+                self.mem_regions[os.path.join(json_dir, k)] = v
+            self.boot_address = self.mem_regions[list(self.mem_regions.keys())[-1]]
+            f.close()
+
+        self.reader_alive = False
+        self.writer_alive = False
+
+        self.prompt_detect_buffer = bytes(len(sfl_prompt_req))
+        self.magic_detect_buffer  = bytes(len(sfl_magic_req))
+
+        self.console = Console()
+
+        signal.signal(signal.SIGINT, self.sigint)
+        self.sigint_time_last = 0
+
+        self.safe        = safe
+        self.delay       = 0
+        self.length      = sfl_safe_data_length if safe else sfl_data_length
+        self.outstanding = 1 if safe else sfl_default_outstanding
+
+    def open(self, port, baudrate):
+        if hasattr(self, "port"):
+            return
+        self.port_url = port
+        self.port = serial.serial_for_url(port, baudrate)
+
+    def close(self):
+        if not hasattr(self, "port"):
+            return
+        self.port.close()
+        del self.port
+
+    def sigint(self, sig, frame):
+        if hasattr(self, "port"):
+            try:
+                self.write_sfl_data(b"\x03", timeout=0.1)
+            except SFLUploadError:
+                pass
+        sigint_time_current = time.time()
+        # Exit term if 2 CTRL-C pressed in less than 0.5s or if the writer is not alive anymore.
+        if not self.writer_alive or (sigint_time_current - self.sigint_time_last < 0.5):
+            self.console.unconfigure()
+            self.close()
+            sys.exit()
+        else:
+            self.sigint_time_last = sigint_time_current
+
+    def read_sfl_reply(self, timeout=1.0):
+        if not hasattr(self.port, "timeout"):
+            reply = self.port.read()
+            if reply == b"":
+                raise SFLUploadError("timed out waiting for device reply")
+            return reply
+
+        previous_timeout = self.port.timeout
+        self.port.timeout = timeout
+        try:
+            reply = self.port.read()
+        finally:
+            self.port.timeout = previous_timeout
+
+        if reply == b"":
+            raise SFLUploadError("timed out waiting for device reply")
+        return reply
+
+    def write_sfl_data(self, data, timeout=1.0):
+        if not hasattr(self.port, "write_timeout"):
+            return self.port.write(data)
+
+        previous_timeout = self.port.write_timeout
+        self.port.write_timeout = timeout
+        try:
+            written = self.port.write(data)
+        except serial.SerialTimeoutException as e:
+            raise SFLUploadError("timed out writing device frame") from e
+        finally:
+            self.port.write_timeout = previous_timeout
+
+        if written is not None and written != len(data):
+            raise SFLUploadError(f"short write to device ({written}/{len(data)} bytes)")
+        return written
+
+    def drain(self):
+        while self.port.in_waiting:
+            self.port.read(self.port.in_waiting)
+
+    def send_frame(self, frame, timeout=1.0, retries=16):
+        encoded_frame = frame.encode()
+        for _ in range(retries):
+            try:
+                self.write_sfl_data(encoded_frame, timeout=timeout)
+                reply = self.read_sfl_reply(timeout=timeout)
+            except SFLUploadError as e:
+                print(f"[LITEX-TERM] {e}, aborting.")
+                return 0
+            if reply == sfl_ack_success:
+                return 1
+            elif reply == sfl_ack_crcerror:
+                continue
+            else:
+                print("[LITEX-TERM] Got unknown reply '{}' from the device, aborting.".format(reply))
+                return 0
+        print("[LITEX-TERM] Too many CRC errors from the device, aborting.")
+        return 0
+
+    def receive_upload_response(self, timeout=1.0):
+        reply = self.read_sfl_reply(timeout=timeout)
+        if reply == sfl_ack_success:
+            return True
+        elif reply == sfl_ack_crcerror:
+            raise SFLUploadError("upload failed due to data corruption (CRC error)", reply=reply)
+        elif reply == sfl_ack_error:
+            raise SFLUploadError("device reported a serial frame error", reply=reply)
+        elif reply == sfl_ack_unknown:
+            raise SFLUploadError("device reported an unknown serial command", reply=reply)
+        else:
+            raise SFLUploadError(f"got unexpected response from device '{reply}'")
+
+    def baudrate(self):
+        return getattr(self.port, "baudrate", 115200) or 115200
+
+    def is_usb_acm(self):
+        port = getattr(self, "port_url", "")
+        return "ttyACM" in port or "cu.usbmodem" in port
+
+    def frame_time(self, data_length=None):
+        data_length = self.length if data_length is None else data_length
+        frame_length = 1 + 2 + 1 + sfl_address_length + data_length
+        return (frame_length * 10) / self.baudrate()
+
+    def make_load_frame(self, address, data):
+        frame = SFLFrame()
+        frame.cmd = sfl_cmd_load
+        frame.payload = address.to_bytes(4, "big") + data
+        return frame
+
+    def settle_upload(self, data_length=None, outstanding=None):
+        data_length = self.length if data_length is None else data_length
+        outstanding = self.outstanding if outstanding is None else outstanding
+        time.sleep(max(0.35, self.frame_time(data_length) * max(1, outstanding) + 0.35))
+        self.drain()
+
+    def upload_calibration(self, address, image_length=None):
+
+        print("[LITEX-TERM] Upload calibration... ", end="")
+        sys.stdout.flush()
+
+        max_probe_length = sfl_data_length
+        if image_length is not None:
+            max_probe_length = min(max_probe_length, image_length)
+        if max_probe_length <= 0:
+            print("skipped.")
+            return True
+
+        nframes = 4
+        working_length = min(sfl_safe_data_length, max_probe_length)
+        frame = self.make_load_frame(address, bytes(working_length))
+        self.drain()
+
+        working = True
+        for _ in range(nframes):
+            timeout = max(1.0, self.frame_time(working_length) + 0.5)
+            if not self.send_frame(frame, timeout=timeout, retries=2):
+                working = False
+                break
+
+        if working:
+            self.delay       = 0
+            if self.is_usb_acm():
+                self.length      = working_length
+                self.outstanding = 1
+            else:
+                self.length      = max_probe_length
+                self.outstanding = sfl_default_outstanding
+            print(f"(inter-frame: {self.delay*1e6:5.2f}us, length: {self.length}, window: {self.outstanding})")
+            return True
+
+        self.settle_upload(data_length=working_length, outstanding=1)
+        print("failed, switching to --safe mode.")
+        self.delay       = 0
+        self.length      = min(sfl_safe_data_length, max(1, max_probe_length))
+        self.outstanding = 1
+        return False
+
+    def upload(self, filename, address):
+        length = os.path.getsize(filename)
+
+        print(f"[LITEX-TERM] Uploading {filename} to 0x{address:08x} ({length} bytes)...")
+
+        # --- MODIFICATION: Skip calibration if we are streaming to flash ---
+        if not self.safe and not self.flash_mode:
+            self.upload_calibration(address, length)
+
+
+        if self.flash_mode:
+            profiles = [(128, 1)]
+        else:
+            profiles = self.upload_profiles()
+
+
+        last_error = None
+        for n, (data_length, outstanding) in enumerate(profiles):
+            try:
+                uploaded = self.upload_once(filename, address, length, data_length, outstanding)
+                self.length = data_length
+                self.outstanding = outstanding
+                if not self.safe and data_length <= sfl_safe_data_length and outstanding == 1:
+                    self.safe = True
+                return uploaded
+            except SFLUploadError as e:
+                last_error = e
+                if n == len(profiles) - 1:
+                    break
+                print(
+                    f"\n[LITEX-TERM] Upload failed with length {data_length}, "
+                    f"window {outstanding}: {e}."
+                )
+                self.settle_upload(data_length=data_length, outstanding=outstanding)
+                next_length, next_outstanding = profiles[n + 1]
+                print(
+                    f"[LITEX-TERM] Retrying with length {next_length}, "
+                    f"window {next_outstanding}."
+                )
+
+        raise last_error
+
+    def upload_profiles(self):
+        if self.safe:
+            return [(self.length, 1)]
+
+        profiles = []
+        for data_length, outstanding in [
+            (self.length, self.outstanding),
+            (self.length, min(4, self.outstanding)),
+            (self.length, 1),
+            (min(sfl_safe_data_length, self.length), 1),
+        ]:
+            data_length = max(1, min(data_length, sfl_data_length))
+            outstanding = max(1, outstanding)
+            profile = (data_length, outstanding)
+            if profile not in profiles:
+                profiles.append(profile)
+        return profiles
+
+    def upload_once(self, filename, address, length, data_length, max_outstanding):
+        with open(filename, "rb") as f:
+            current_address = address
+            position        = 0
+            start           = time.time()
+            remaining       = length
+            outstanding     = deque()
+            current_window  = 1
+            window_successes = 0
+            last_progress_update = 0.0
+            while remaining or outstanding:
+                # Show progress (throttled to 10 Hz to avoid overloading terminal/X11)
+                now = time.time()
+                if length and now - last_progress_update >= 0.1:
+                    sys.stdout.write("|{}>{}| {}%\r".format(
+                        "=" * (20*position//length),
+                        " " * (20-20*position//length),
+                        100*position//length))
+                    sys.stdout.flush()
+                    last_progress_update = now
+
+                # Send frame if max outstanding not reached.
+                while remaining and len(outstanding) < current_window:
+                    # Prepare frame.
+                    frame_data = f.read(min(remaining, data_length))
+                    frame = self.make_load_frame(current_address, frame_data)
+                    encoded_frame = frame.encode()
+
+                    # Encode frame and send it.
+                    write_timeout = max(1.0, self.frame_time(data_length) + 0.5)
+                    self.write_sfl_data(encoded_frame, timeout=write_timeout)
+
+                    # Update parameters
+                    current_address += len(frame_data)
+                    position        += len(frame_data)
+                    remaining       -= len(frame_data)
+                    outstanding.append({"frame": encoded_frame, "retries": 0})
+
+                    # Inter-frame delay.
+                    time.sleep(self.delay)
+
+                if not outstanding:
+                    continue
+
+                try:
+                    ack = self.receive_upload_response(
+                        timeout=max(1.0, self.frame_time(data_length) * (len(outstanding) + 1) + 0.5)
+                    )
+                except SFLUploadError as e:
+                    if (
+                        e.reply == sfl_ack_crcerror and
+                        len(outstanding) == 1 and
+                        outstanding[0]["retries"] < 16
+                    ):
+                        outstanding[0]["retries"] += 1
+                        write_timeout = max(1.0, self.frame_time(data_length) + 0.5)
+                        self.write_sfl_data(outstanding[0]["frame"], timeout=write_timeout)
+                        current_window = 1
+                        window_successes = 0
+                        continue
+                    raise
+
+                if ack:
+                    outstanding.popleft()
+                    if current_window < max_outstanding:
+                        window_successes += 1
+                        if window_successes >= current_window:
+                            current_window += 1
+                            window_successes = 0
+
+            # Compute speed.
+            end     = time.time()
+            elapsed = end - start
+            print("[LITEX-TERM] Upload complete ({0:.1f}KB/s).".format(length/(elapsed*1024)))
+            return length
+
+    def boot(self):
+        print("[LITEX-TERM] Sending the Boot Command to the device.")
+        frame = SFLFrame()
+        frame.cmd = sfl_cmd_jump
+        frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
+        if not self.send_frame(frame):
+            raise SFLUploadError("could not send boot command")
+    ## default flash_adr_offset is 0x20000, which is the default flash offset for LiteX designs.
+    # change this in the command line if you want to flash to a different address.
+    #     
+    def flash(self, image_size,flash_adr=0x20000):
+      
+        print(f"[LITEX-TERM] Requesting device to flash {image_size} bytes to offset 0x{flash_adr:08x}.")
+        print(f"[LITEX-TERM] Erasing the Flash  ({image_size} bytes).")
+        # FIX: Allow target UART TX to finish, then flush stale \r\n bytes from host buffer
+        time.sleep(0.05)
+        self.drain()
+
+        frame = SFLFrame()
+        frame.cmd = sfl_cmd_flash
+        # Encode ONLY the 4-byte total file size into the payload
+        #frame.payload = image_size.to_bytes(4, "big")
+
+        # Payload: [4-byte total size] + [4-byte target flash address]
+        frame.payload = image_size.to_bytes(4, "big") + flash_adr.to_bytes(4, "big")
+
+        # FIX: Increase timeout to 30.0s so host doesn't time out during spiflash_erase_range
+        if not self.send_frame(frame, timeout=30.0):
+            raise SFLUploadError("could not send flash command")
+        
+    def send_done_command(self):
+        # Create the command frame: [Length=0] [CRC] [CMD=0x04]
+        # Note: Adjust payload length/CRC calculation to match your specific 
+        # frame encoding implementation.
+        print("[LITEX-TERM] Transmission Completed.")
+        frame = SFLFrame()
+        frame.cmd = sfl_cmd_done
+        frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
+        if not self.send_frame(frame):
+            raise SFLUploadError("could not send EOT command")      
+
+
+    def abort_serialboot(self):
+        print("[LITEX-TERM] Aborting serial boot.")
+        time.sleep(0.35)
+        self.drain()
+
+        frame = SFLFrame()
+        frame.cmd = sfl_cmd_abort
+
+        try:
+            self.write_sfl_data(frame.encode(), timeout=1.0)
+            reply = self.read_sfl_reply(timeout=1.0)
+        except SFLUploadError as e:
+            print(f"[LITEX-TERM] Serial boot abort failed: {e}.")
+            return False
+
+        if reply == sfl_ack_success:
+            print("[LITEX-TERM] Serial boot aborted.")
+            return True
+
+        print(f"[LITEX-TERM] Serial boot abort got unexpected response '{reply}'.")
+        return False
+
+    def detect_prompt(self, data):
+        if len(data):
+            self.prompt_detect_buffer = self.prompt_detect_buffer[1:] + data
+            return self.prompt_detect_buffer == sfl_prompt_req
+        else:
+            return False
+
+    def answer_prompt(self):
+        print("[LITEX-TERM] Received serial boot prompt from the device.")
+        self.port.write(sfl_prompt_ack)
+
+    def detect_magic(self, data):
+        if len(data):
+            self.magic_detect_buffer = self.magic_detect_buffer[1:] + data
+            return self.magic_detect_buffer == sfl_magic_req
+        else:
+            return False
+
+    def answer_magic(self):
+        print("[LITEX-TERM] Received firmware download request from the device.")
+        if(len(self.mem_regions)):
+            self.port.write(sfl_magic_ack)
+        try:
+            if self.flash_mode: # send the file size along with flash command
+                # Calculate the total size of all images registered for download
+                #total_size = sum(os.path.getsize(f) for f in self.mem_regions.keys())
+                #self.flash(total_size,flash_adr=int(self.boot_address, 16)) # send the flash command with total size and flash address
+
+                total_size = sum(os.path.getsize(f) for f in self.mem_regions.keys())
+                first_base = list(self.mem_regions.values())[0]
+                flash_offset = int(first_base, 16) # Send pure offset (e.g. 0x20000 or 0x40000)
+                
+                self.flash(total_size, flash_offset)
+                
+            for filename, base in self.mem_regions.items():
+                self.upload(filename, int(base, 16))
+
+            # --- BOOT / NO-BOOT LOGIC ---
+            if self.no_boot:
+                if self.flash_mode:
+                    print("[LITEX-TERM] Direct Flash complete. Returning to prompt (--no-boot).")
+                    self.send_done_command()
+                else:
+                    print("[LITEX-TERM] RAM Download complete. Returning to prompt (--no-boot).")
+                    self.abort_serialboot()                    
+            else:
+
+                if self.flash_mode:
+                    print("[LITEX-TERM] Direct Flash Programming complete. Returning to prompt (--no-boot).")
+                    self.send_done_command()
+                else:
+                    
+                    #print("[LITEX-TERM] Sending the Boot Command to the device .")
+                    self.boot() # Sends SFL_CMD_JUMP command to target device
+
+            #print("[LITEX-TERM] Done.")
+        except SFLUploadError as e:
+            print(f"\n[LITEX-TERM] Serial boot failed: {e}.")
+            self.abort_serialboot()
+
+    def reader(self):
+        try:
+            while self.reader_alive:
+                c = self.port.read()
+                sys.stdout.buffer.write(c)
+                sys.stdout.flush()
+                if len(self.mem_regions):
+                    if self.serial_boot and self.detect_prompt(c):
+                        self.answer_prompt()
+                    if self.detect_magic(c):
+                        self.answer_magic()
+
+        except serial.SerialException:
+            self.stop()
+            self.console.unconfigure()
+            self.close()
+            print("[LITEX-TERM] Lost connection to the device, exiting.")
+            signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+            raise
+
+    def start_reader(self):
+        self.reader_alive = True
+        self.reader_thread = threading.Thread(target=self.reader, daemon=True)
+        self.reader_thread.start()
+
+    def stop_reader(self):
+        self.reader_alive = False
+        self.reader_thread.join()
+
+    def writer(self):
+        try:
+            while self.writer_alive:
+                b = self.console.getkey()
+                if b == b"\x03":
+                    self.stop()
+                elif b == b"\n":
+                    self.port.write(b"\x0a")
+                elif self.console.escape_char(b):
+                    b = self.console.getkey()
+                    ansi_seq = self.console.handle_escape(b)
+                    self.port.write(ansi_seq)
+                else:
+                    self.port.write(b)
+        except Exception:
+            self.writer_alive = False
+            self.console.unconfigure()
+            raise
+
+    def start_writer(self):
+        self.writer_alive = True
+        self.writer_thread = threading.Thread(target=self.writer, daemon=True)
+        self.writer_thread.start()
+
+    def stop_writer(self):
+        self.writer_alive = False
+        self.writer_thread.join()
+
+    def start(self):
+        self.start_reader()
+        self.start_writer()
+
+    def stop(self):
+        self.reader_alive = False
+        self.writer_alive = False
+
+    def join(self, writer_only=False):
+        self.writer_thread.join()
+        if not writer_only:
+            self.reader_thread.join()
+
+# Run ----------------------------------------------------------------------------------------------
+
+def _get_args():
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("port",                                                 help="Serial port (eg /dev/tty*, crossover, jtag).")
+    parser.add_argument("--speed",          default=115200,                     help="Serial baudrate.")
+    parser.add_argument("--serial-boot",    default=False, action='store_true', help="Automatically initiate serial boot.")
+    parser.add_argument("--kernel",         default=None,                       help="Kernel image.")
+    parser.add_argument("--kernel-adr",     default="0x40000000",               help="Kernel address.")
+    parser.add_argument("--no-boot",        default=False, action='store_true', help="Download to RAM without booting (returns to prompt).") # <-- Add this line
+    parser.add_argument("--flash", action="store_true", help="Stream binary directly to SPI Flash instead of MAIN_RAM.")
+    parser.add_argument("--images",         default=None,                       help="JSON description of the images to load to memory.")
+    parser.add_argument("--safe",           action="store_true",                help="Safe serial boot mode, disable upload speed optimizations.")
+
+    parser.add_argument("--csr-csv",        default=None,                       help="SoC CSV file.")
+    parser.add_argument("--base-address",   default=None,                       help="CSR base address.")
+    parser.add_argument("--crossover-name", default="uart_xover",               help="Crossover UART name to use (present in design/csr.csv).")
+    parser.add_argument("--crossover-host", default="localhost",                help="Crossover UART host address.")
+    parser.add_argument("--crossover-port", default=1234,                       help="Crossover UART host port.")
+
+    parser.add_argument("--jtag-name",      default="jtag_uart",                help="JTAG UART type (jtag_uart).")
+    parser.add_argument("--jtag-config",    default="openocd_xc7_ft2232.cfg",   help="OpenOCD JTAG configuration file for jtag_uart.")
+    parser.add_argument("--jtag-chain",     default=1,                          help="JTAG chain.")
+    return parser.parse_args()
+
+def main():
+    args = _get_args()
+    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images, args.safe,args.no_boot,flash=args.flash)
+
+    if sys.platform == "win32":
+        if args.port in ["crossover", "jtag"]:
+            raise NotImplementedError
+    if args.port in ["crossover"]:
+        base_address = None if args.base_address is None else int(args.base_address, 0)
+        xover = CrossoverUART(
+            host         = args.crossover_host,
+            port         = int(args.crossover_port),
+            base_address = base_address,
+            csr_csv      = args.csr_csv,
+            name         = args.crossover_name,
+        )
+        xover.open()
+        port = os.ttyname(xover.name)
+    elif args.port in ["jtag"]:
+        if args.jtag_name == "jtag_uart":
+            jtag_uart = JTAGUART(config=args.jtag_config, chain=int(args.jtag_chain))
+            jtag_uart.open()
+            port = os.ttyname(jtag_uart.name)
+        else:
+            raise NotImplementedError
+    else:
+        port = args.port
+    term.open(port, int(float(args.speed)))
+    term.console.configure()
+    term.start()
+    term.join(True)
+
+if __name__ == "__main__":
+    main()

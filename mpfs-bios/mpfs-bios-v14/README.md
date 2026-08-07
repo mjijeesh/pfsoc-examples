@@ -1,11 +1,32 @@
-# PolarFire SoC Baremetal BIOS v12
+# PolarFire SoC Baremetal BIOS v14
 
+
+##### What is new V14
+
+1. tested with mpfs-icicle-kit
+2. Added Build date and Tiem stamp
+3. Fixed Package/DIE for different boards.
+
+
+Use the BOARD variabel to make for different board.
+every board will use MMUART0 and MMUART1
+
+
+`make clean envm  BOARD=mpfs-icicle-kit`
+
+for the target application
+
+`make clean ddr BOARD=mpfs-icile-kit`
+
+
+if you dont specify the BOARD ,the target will be by default `mpfs-discovery-kit`
+
+
+##### What is new V13
 
 1. Added file  comments
 2. Simplified the Makefile.
 3. now using separate uart ( uart0) for bios and target app ( uart1)
----------------------------------------------------------------------------------------------------------------------------------
-
 ---------------------------------------------------------------------------------------------------------------------------------
 ##### What is new V11
 
