@@ -21,6 +21,11 @@ static const struct command_struct command_table[] = {
     { hw_info_handler,     "hw_info",    "Display hardware map and peripherals", SYSTEM_CMDS },
     { reboot_handler,      "reboot",     "Reboot system",                       SYSTEM_CMDS },
 
+    { sys_serial_handler,       "sys_serial",        "Read 128-bit Device Serial Number (DSN)",             SYSTEM_CMDS },
+    { sys_info_handler,         "sys_info",          "Read FPGA Usercode and Design Information",            SYSTEM_CMDS },
+    { sys_iap_handler,          "sys_iap",           "Execute IAP Bitstream Programming: sys_iap <addr>",   SYSTEM_CMDS },
+    { sys_digest_handler,       "sys_digest",        "Run Digest Integrity Check across fabric & memories",   SYSTEM_CMDS },
+
     // Boot Commands
     { boot_handler,        "boot",       "Boot from Memory: boot <addr> [r1]",  BOOT_CMDS },
     { serialboot_handler,  "serialboot", "Boot from Serial (SFL)",              BOOT_CMDS },

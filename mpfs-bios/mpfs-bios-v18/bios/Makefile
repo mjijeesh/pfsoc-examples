@@ -21,24 +21,11 @@ TARGET  := pfsoc_bios
 BUILD_TIMESTAMP := $(shell date +"%Y-%m-%d %H:%M:%S")
 CFLAGS += -DBUILD_TIMESTAMP="\"$(BUILD_TIMESTAMP)\""
 
-
-# To use FPGA CoreSPI IP:
-#CFLAGS += -DUSE_CORE_SPI
-# OR to use Hard MSS SPI:
-# CFLAGS += -DUSE_MSS_SPI
-
-
 ifeq ($(BOARD),mpfs-icicle-kit)
     CFLAGS += -DUSE_CORE_SPI -DCORESPI_BASE_ADDR=0x40000000UL
 else
     CFLAGS += -DUSE_MSS_SPI
 endif
-
-
-
-
-
-
 
 # ==============================================================================
 # OS Detection & OpenOCD Executable Path Configuration
@@ -49,37 +36,34 @@ else
     OPENOCD ?= /opt/microchip/SoftConsole/SoftConsole-v2022/openocd/bin/openocd
 endif
 
+# ==============================================================================
+# FlashPro Express FPGA Job Programming Configuration
+# ==============================================================================
+ifeq ($(OS),Windows_NT)
+    FPEXPRESS ?= C:/Microchip/Libero_SoC_v2025.2/Designer/bin64/FPExpress.exe
+else
+    FPEXPRESS ?= /opt/microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/FPExpress
+endif
+
 # ------------------------------------------------------------------------------
 # Dynamic Board Configuration & Validation
 # ------------------------------------------------------------------------------
 BOARD     ?= mpfs-discovery-kit
-BOARD_DIR ?= boards/$(BOARD)
-
-AVAILABLE_BOARDS := $(notdir $(wildcard boards/*))
-
-# ==============================================================================                                                                                                        
-# SECTION 2: BOARD & DEVICE (DIE / PACKAGE) SELECTION                                                                                                                                   
-# ==============================================================================                                                                                                        
-
-# Default Board Selection (Can be overridden from CLI: make BOARD=mpfs-icicle-kit)                                                                                                      
-BOARD     ?= mpfs-discovery-kit
 BOARD_DIR := boards/$(BOARD)
 
-# Discover Available Board Configurations Under boards/ Directory                                                                                                                       
 AVAILABLE_BOARDS := $(notdir $(wildcard boards/*))
 
-# Automatically Assign Default FPGA Device Parameters Based on Target Board                                                                                                             
-# (Can be overridden from CLI: make DIE=MPFS250T PACKAGE=FCG1152)                                                                                                                       
+# Default Job File path based on selected board
+JOB_FILE ?= $(BOARD_DIR)/fpga_design/$(BOARD).job
+
+# Device defaults
 ifeq ($(BOARD),mpfs-icicle-kit)
     DIE_DEFAULT     := MPFS250T
-	PACKAGE_DEFAULT := FCVG484
-    
+    PACKAGE_DEFAULT := FCVG484
 else ifeq ($(BOARD),mpfs-video-kit)
     DIE_DEFAULT     := MPFS250T
-	PACKAGE_DEFAULT := FCG1152
-    
+    PACKAGE_DEFAULT := FCG1152
 else
-    # Default for mpfs-discovery-kit and standard custom boards                                                                                                                         
     DIE_DEFAULT     := MPFS095T
     PACKAGE_DEFAULT := FCSG325
 endif
@@ -87,12 +71,7 @@ endif
 DIE     ?= $(DIE_DEFAULT)
 PACKAGE ?= $(PACKAGE_DEFAULT)
 
-# Add near the CFLAGS configuration section
 CFLAGS += -DMPFS_TARGET_DIE="\"$(DIE)\"" -DMPFS_TARGET_PACKAGE="\"$(PACKAGE)\""
-
-
-
-
 
 ifeq ($(wildcard $(BOARD_DIR)),)
     $(info ========================================================================)
@@ -124,25 +103,18 @@ ifeq ($(BOARD_XML_FILES),)
     $(error Build aborted due to missing XML configuration file)
 endif
 
-
-# Maps BOARD variable to compiler preprocessor macro for uart_mapping.c                                                                                                                 
 ifeq ($(BOARD),mpfs-discovery-kit)
-    #CFLAGS += -DMPFS_DISCOVERY_KIT
-	# Default UART Mapping for E51 Monitor Core
-	CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
+    CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
 else ifeq ($(BOARD),mpfs-icicle-kit)
-    #CFLAGS += -DMPFS_ICICLE_KIT_ES
-	# Default UART Mapping for E51 Monitor Core
-	CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
+    CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
+    CFLAGS += -DMICROCHIP_STDIO_BAUD_RATE=MSS_UART_460800_BAUD
 else ifeq ($(BOARD),mpfs-video-kit)
     CFLAGS += -DMPFS_VIDEO_KIT
-	# Default UART Mapping for E51 Monitor Core
-	CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
+    CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
 else
     BOARD_MACRO := $(shell echo $(BOARD) | tr 'a-z-' 'A-Z_')
     CFLAGS += -D$(BOARD_MACRO)
 endif
-
 
 # ------------------------------------------------------------------------------
 # Debugger Configuration
@@ -156,7 +128,6 @@ GDB_PORT     ?= 3333
 MEM_TARGET ?= lim
 
 ifeq ($(MEM_TARGET),envm)
-    # Direct Execute-in-Place (XIP) from eNVM
     BUILD_DIR     := build/envm
     LINKER_SCRIPT := $(BOARD_DIR)/platform_config/envm-release/linker/mpfs-envm.ld
     CONFIG_DIR    := envm-release
@@ -175,13 +146,11 @@ else ifeq ($(MEM_TARGET),envm-lim)
     LINKER_SCRIPT := $(BOARD_DIR)/platform_config/envm-scratchpad-release/linker/mpfs-envm-lma-scratchpad-vma.ld
     CONFIG_DIR    := envm-scratchpad-release
 else
-    # Defaulting to LIM
     BUILD_DIR     := build/lim
     LINKER_SCRIPT := $(BOARD_DIR)/platform_config/lim-debug/linker/mpfs-lim.ld
     CONFIG_DIR    := lim-debug
 endif
 
-# Ensure sub-makes retain MEM_TARGET context
 export MEM_TARGET
 
 # ------------------------------------------------------------------------------
@@ -194,60 +163,65 @@ ARCH_FLAGS := -march=rv64gc \
               -mstrict-align \
               -mno-save-restore
 
-# ------------------------------------------------------------------------------
-# Source Code & Include Directory Discovery
-# ------------------------------------------------------------------------------
-DRIVER_DIRS := $(wildcard platform/drivers/*)
-DRIVER_DIRS += platform/drivers/mss/mss_mmuart
-DRIVER_DIRS += platform/drivers/mss/mss_gpio
-DRIVER_DIRS += platform/drivers/mss/mss_spi
+# ==============================================================================
+# Include Directories (Categorized)
+# ==============================================================================
 
-# ------------------------------------------------------------------------------
-# Source Code & Include Directory FPGA IPs
-# ------------------------------------------------------------------------------
-DRIVER_DIRS += platform/drivers/fpga_ip/CoreSPI
-
-INCLUDE_DIRS += $(BOARD_DIR)/platform_config/$(CONFIG_DIR) \
-                $(BOARD_DIR)/platform_config/$(CONFIG_DIR)/mpfs_hal_config \
-                application \
-                platform \
-				application/cli \
-                application/cli/commands \
-                application/boot \
+# Application Includes
+APP_INC_DIRS := application \
+                application/bios \
+                application/bios/commands \
                 application/drivers/flash \
                 application/drivers/uart \
-                application/utils \
-                $(BOARD_DIR) \
-                $(DRIVER_DIRS)
+                application/utils
 
-INC_FLAGS := $(addprefix -I, $(INCLUDE_DIRS))
+# Driver Includes
+DRIVER_INC_DIRS := platform/drivers/mss/mss_mmuart \
+                   platform/drivers/mss/mss_gpio \
+                   platform/drivers/mss/mss_spi \
+                   platform/drivers/mss/mss_sys_services \
+                   platform/drivers/fpga_ip/CoreSPI
 
-# Discover C and Assembly sources
-RAW_SRCS_C := $(wildcard application/*.c) \
+# HAL & Hardware Configuration Includes
+HAL_INC_DIRS := $(BOARD_DIR)/platform_config/$(CONFIG_DIR) \
+                $(BOARD_DIR)/platform_config/$(CONFIG_DIR)/mpfs_hal_config \
+                platform \
+                $(BOARD_DIR)
+
+# Combined Includes
+INCLUDE_DIRS := $(APP_INC_DIRS) $(DRIVER_INC_DIRS) $(HAL_INC_DIRS)
+INC_FLAGS    := $(addprefix -I, $(INCLUDE_DIRS))
+
+# ==============================================================================
+# Source Files Discovery (Categorized)
+# ==============================================================================
+
+# Application Sources
+APP_SRCS_C := $(wildcard application/*.c) \
               $(wildcard application/*/*.c) \
-              $(wildcard platform/drivers/*/*.c) \
-              $(wildcard platform/mpfs_hal/startup_gcc/*.c) \
+              $(wildcard application/*/*/*.c)
+
+# Peripheral Driver Sources (Explicitly specified to avoid unused drivers)
+DRIVER_SRCS_C := platform/drivers/mss/mss_mmuart/mss_uart.c \
+                 platform/drivers/mss/mss_gpio/mss_gpio.c \
+                 platform/drivers/mss/mss_spi/mss_spi.c \
+                 platform/drivers/fpga_ip/CoreSPI/core_spi.c \
+                 platform/drivers/mss/mss_sys_services/mss_sys_services.c
+
+# Hardware Abstraction Layer (HAL) Sources
+HAL_SRCS_C := $(wildcard platform/mpfs_hal/startup_gcc/*.c) \
               $(wildcard platform/mpfs_hal/common/*.c) \
               $(wildcard platform/mpfs_hal/common/nwc/*.c) \
               $(wildcard platform/hal/*.c)
 
-RAW_SRCS_C += $(wildcard application/core/*/*.c) \
-              $(wildcard application/cli/*.c) \
-              $(wildcard application/cli/commands/*.c) \
-              $(wildcard application/boot/*.c) \
-              $(wildcard application/drivers/*/*.c) \
-              $(wildcard application/utils/*.c) \
-              platform/drivers/mss/mss_mmuart/mss_uart.c \
-              platform/drivers/mss/mss_gpio/mss_gpio.c \
-			  platform/drivers/mss/mss_spi/mss_spi.c \
-			  platform/drivers/fpga_ip/CoreSPI/core_spi.c
+HAL_SRCS_ASM := $(wildcard platform/hal/*.S) \
+                $(wildcard platform/mpfs_hal/startup_gcc/*.S)
 
+# Sorted/Deduplicated Source Collections
+SRCS_C   := $(sort $(APP_SRCS_C) $(DRIVER_SRCS_C) $(HAL_SRCS_C))
+SRCS_ASM := $(sort $(HAL_SRCS_ASM))
 
-SRCS_C := $(sort $(RAW_SRCS_C))
-
-SRCS_ASM := $(wildcard platform/hal/*.S) \
-            $(wildcard platform/mpfs_hal/startup_gcc/*.S)
-
+# Target Object Files
 OBJS := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRCS_C)) \
         $(patsubst %.S, $(BUILD_DIR)/%.o, $(SRCS_ASM))
 
@@ -287,15 +261,10 @@ export FPGENPROG      ?= /opt/microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bi
 
 BOOTMODE_PROGRAMMER   ?= $(SC_INSTALL_DIR)/extras/mpfs/mpfsBootmodeProgrammer.jar
 
-# Target FPGA Hardware Parameters (MPFS Discovery Kit)
-DIE     ?= MPFS095T
-PACKAGE ?= FCSG325
-
 # ==============================================================================
 # Core Automation Targets
 # ==============================================================================
-
-.PHONY: all clean show_size lim lim-app envm envm-lim ddr generate_headers openocd debug gdbinit help program-envm program-envm-lim flash-envm
+.PHONY: all clean show_size lim lim-app envm envm-lim ddr generate_headers openocd debug gdbinit help program-envm program-envm-lim flash-envm program-job
 
 help:
 	@echo "========================================================================"
@@ -314,6 +283,7 @@ help:
 	@echo "   all               - Build executable images for active MEM_TARGET"
 	@echo ""
 	@echo " Flashing & Hardware Debugging:"
+	@echo "   program-job       - Flash FPGA fabric using a .job file (JOB_FILE=<path>)"
 	@echo "   program-envm      - Flash eNVM XIP build into eNVM (Boot Mode 1)"
 	@echo "   program-envm-lim  - Flash eNVM-LIM build into eNVM (Boot Mode 1)"
 	@echo "   openocd           - Launch OpenOCD JTAG connection server"
@@ -342,7 +312,7 @@ generate_headers:
 	@echo "=================================================="
 	@$(PYTHON) $(SOC_GEN_SCRIPT) $(XML_CONFIG_DIR) $(CONFIG_OUT_DIR)
 
-all: generate_headers $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex  $(BUILD_DIR)/$(TARGET).fbi show_size
+all: generate_headers $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).fbi show_size
 
 $(OBJS): | generate_headers
 
@@ -371,7 +341,6 @@ $(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
 $(BUILD_DIR)/$(TARGET).fbi: $(BUILD_DIR)/$(TARGET).bin
 	@echo " [FBI] Generating Flash Binary Image with CRC32: $@"
 	@$(CRCFBIGEN) $< -o $@ --fbi --little
-
 
 show_size: $(BUILD_DIR)/$(TARGET).elf
 	@echo ""
@@ -428,6 +397,22 @@ flash-envm:
 		-ex 'load' \
 		-ex 'detach' \
 		-ex 'quit'
+
+program-job:
+	@echo "=================================================="
+	@echo " Programming FPGA Fabric with Job File"
+	@echo " Job File     : $(JOB_FILE)"
+	@echo " Target Board : $(BOARD)"
+	@echo "=================================================="
+	@if [ ! -f "$(JOB_FILE)" ]; then \
+		echo "[ERROR] Job file '$(JOB_FILE)' was not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p $(BUILD_DIR)/fp_job
+	@echo "create_job_project -job_project_location {$(CURDIR)/$(BUILD_DIR)/fp_job} -job_file {$(CURDIR)/$(JOB_FILE)} -overwrite 1" > $(BUILD_DIR)/program_job.tcl
+	@echo "run_selected_actions" >> $(BUILD_DIR)/program_job.tcl
+	@echo "close_project" >> $(BUILD_DIR)/program_job.tcl
+	$(FPEXPRESS) SCRIPT:$(BUILD_DIR)/program_job.tcl
 
 # ------------------------------------------------------------------------------
 # Debugging Automation Targets

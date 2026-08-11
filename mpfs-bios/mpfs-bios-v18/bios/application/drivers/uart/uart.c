@@ -31,9 +31,9 @@ void uart_init(void)
     /* 1. Enable Clock & Reset for the board-specific MMUART instance */
     (void) mss_config_clk_rst(MSS_PERIPH_MMUART_E51, (uint8_t) 1, PERIPHERAL_ON);
 
-    /* 2. Configure board UART instance for 115200 baud, 8N1 */
+    /* 2. Configure board UART instance for 460800 baud, 8N1 */
     MSS_UART_init(p_uartmap_e51,
-                  MSS_UART_115200_BAUD,
+                  MSS_UART_460800_BAUD,
                   MSS_UART_DATA_8_BITS | MSS_UART_NO_PARITY | MSS_UART_ONE_STOP_BIT);
 }
 

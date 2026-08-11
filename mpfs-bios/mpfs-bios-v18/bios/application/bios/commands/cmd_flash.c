@@ -22,7 +22,7 @@
  */
 void flashboot_handler(int nb_params, char **params)
 {
-    uint32_t flash_offset = 0x0020000; /* Default 1MB Flash Offset */
+    uint32_t flash_offset = 0x0020000;  /* Default 1MB Flash Offset */
     uintptr_t ram_addr  = 0x80000000;   /* Default DDR (0x80000000) or LIM (0x08040000) */
     size_t max_ram_size = 0;
     uint8_t header[8];

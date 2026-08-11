@@ -13,7 +13,6 @@
 #include "cli.h"
 #include "readline.h"
 #include "uart.h"
-#include "xmodem.h"
 #include "serialboot.h"
 
 #define MAX_LINE_LEN 128  /* Maximum length for command input buffer */
@@ -102,7 +101,6 @@ static void cmd_ident(int argc, char **argv);
 static void cmd_mread(int argc, char **argv);
 static void cmd_mwrite(int argc, char **argv);
 static void cmd_go(int argc, char **argv);
-static void cmd_xmodem(int argc, char **argv);
 static void cmd_serialboot(int argc, char **argv);
 
 /* Shell Command Lookup Table */
@@ -112,7 +110,6 @@ static const struct command command_table[] = {
     { "mr",         cmd_mread,      "Memory Read:  mr <hex_addr> [count]" },
     { "mw",         cmd_mwrite,     "Memory Write: mw <hex_addr> <hex_val>" },
     { "go",         cmd_go,         "Jump execution: go <hex_addr>" },
-    { "xmodem",     cmd_xmodem,     "Upload binary via XMODEM: xmodem <hex_addr>" },
     { "serialboot", cmd_serialboot, "Serial Boot mode" },
 };
 
@@ -216,20 +213,6 @@ static void cmd_go(int argc, char **argv)
     entry();
 }
 
-/**
- * @brief Shell command to receive a binary payload over serial using XMODEM.
- * Usage: xmodem <hex_addr>
- */
-static void cmd_xmodem(int argc, char **argv)
-{
-    if (argc < 2) {
-        printf("Usage: xmodem <hex_addr>\r\n");
-        return;
-    }
-
-    uintptr_t addr = (uintptr_t)strtoull(argv[1], NULL, 16);
-    xmodem_receive((uint8_t *)addr);
-}
 
 
 #ifndef BUILD_TIMESTAMP

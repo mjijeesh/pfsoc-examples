@@ -39,6 +39,12 @@ extern void flash_copy_handler(int nb_params, char **params);
 extern void serialboot_handler(int nb_params, char **params);
 extern void flashwrite_handler(int nb_params, char **params);
 
+/* System Services Command Handlers */
+extern void sys_serial_handler(int nb_params, char **params);
+extern void sys_info_handler(int nb_params, char **params);
+extern void sys_iap_handler(int nb_params, char **params);
+extern void sys_digest_handler(int nb_params, char **params);
+
 
 
 #define MAX_PARAM       8    /* Maximum shell command parameters */
