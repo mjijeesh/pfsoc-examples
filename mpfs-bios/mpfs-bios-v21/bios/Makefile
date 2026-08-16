@@ -40,6 +40,14 @@ else
     FPEXPRESS ?= /opt/microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/FPExpress
 endif
 
+
+# ------------------------------------------------------------------------------
+# Debugger Configuration
+# ------------------------------------------------------------------------------
+OPENOCD_CFG  ?= -c "set DEVICE MPFS" -f board/microsemi-riscv.cfg
+GDB_PORT     ?= 3333
+
+
 # ------------------------------------------------------------------------------
 # Dynamic Board Configuration & Validation
 # ------------------------------------------------------------------------------
@@ -63,10 +71,6 @@ else
     PACKAGE_DEFAULT := FCSG325
 endif
 
-DIE     ?= $(DIE_DEFAULT)
-PACKAGE ?= $(PACKAGE_DEFAULT)
-
-CFLAGS += -DMPFS_TARGET_DIE="\"$(DIE)\"" -DMPFS_TARGET_PACKAGE="\"$(PACKAGE)\""
 
 ifeq ($(wildcard $(BOARD_DIR)),)
     $(info ========================================================================)
@@ -77,6 +81,10 @@ ifeq ($(wildcard $(BOARD_DIR)),)
     $(info ========================================================================)
     $(error Build aborted due to invalid board selection)
 endif
+
+
+
+
 
 
 
@@ -124,24 +132,6 @@ ifeq ($(BOARD_XML_FILES),)
     $(error Build aborted due to missing XML configuration file)
 endif
 
-ifeq ($(BOARD),mpfs-discovery-kit)
-    CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
-else ifeq ($(BOARD),mpfs-icicle-kit)
-    CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
-    #CFLAGS += -DMICROCHIP_STDIO_BAUD_RATE=MSS_UART_460800_BAUD
-else ifeq ($(BOARD),mpfs-video-kit)
-    CFLAGS += -DMPFS_VIDEO_KIT
-    CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&g_mss_uart0_lo
-else
-    BOARD_MACRO := $(shell echo $(BOARD) | tr 'a-z-' 'A-Z_')
-    CFLAGS += -D$(BOARD_MACRO)
-endif
-
-# ------------------------------------------------------------------------------
-# Debugger Configuration
-# ------------------------------------------------------------------------------
-OPENOCD_CFG  ?= -c "set DEVICE MPFS" -f board/microsemi-riscv.cfg
-GDB_PORT     ?= 3333
 
 # ------------------------------------------------------------------------------
 # Dynamic Memory Target Configuration Switcher
@@ -177,8 +167,68 @@ export MEM_TARGET
 # ==============================================================================
 # Pass Board Name and Memory Target directly to C Compiler (ADD LINES HERE)
 # ==============================================================================
+#CFLAGS += -DBOARD_NAME="\"$(BOARD)\""
+#CFLAGS += -DMEM_TARGET="\"$(MEM_TARGET)\""
+
+
+# Include board-specific Make fragment (loads board_config.mk defaults if present)
+-include $(BOARD_DIR)/board.mk
+
+# Fallback board defaults if board_config.mk is missing
+CLI_PROMPT          ?= $(BOARD)>
+DIE                 ?= MPFS095T
+PACKAGE             ?= FCSG325
+MSS_UART            ?= MSS_UART0
+BAUD_RATE           ?= 115200
+SPI_FLASH_ENGINE    ?= MSS_SPI0
+FLASH_FAMILY        ?= AUTO
+SPI_FLASH_BOOT_ADDR ?= 0x00100000
+PAYLOAD_RAM_ADDR    ?= 0x80000000
+ENABLE_SPI_FLASH    ?= 1
+ENABLE_SDCARD       ?= 1
+ENABLE_FATFS        ?= 1
+JOB_FILE            ?= $(BOARD_DIR)/fpga_design/$(BOARD).job
+
+# ------------------------------------------------------------------------------
+# 4. MSS UART Port Symbol & Peripheral Clock Resolution
+#
+# Usage:
+#   make MSS_UART=0           -> Selects UART 0 (g_mss_uart0_lo)
+#   make MSS_UART=MSS_UART2   -> Selects UART 2 (g_mss_uart2_lo)
+#   make                      -> Defaults to UART 0 if unset/invalid
+# ------------------------------------------------------------------------------
+
+# Extract number (strips "MSS_UART" prefix if present, e.g., MSS_UART0 -> 0)
+_UART_NUM := $(patsubst MSS_UART%,%,$(MSS_UART))
+
+# Fallback to 0 if _UART_NUM is not in the range [0, 4]
+ifeq ($(filter $(_UART_NUM),0 1 2 3 4),)
+    _UART_NUM := 0
+endif
+
+STDIO_UART_SYMBOL := g_mss_uart$(_UART_NUM)_lo
+STDIO_UART_PERIPH := MSS_PERIPH_MMUART$(_UART_NUM)
+
+
+
+# Forward Make overrides to C Preprocessor (-D flags)
 CFLAGS += -DBOARD_NAME="\"$(BOARD)\""
-CFLAGS += -DMEM_TARGET="\"$(MEM_TARGET)\""
+CFLAGS += -DMPFS_TARGET_DIE="\"$(DIE)\""
+CFLAGS += -DMPFS_TARGET_PACKAGE="\"$(PACKAGE)\""
+CFLAGS += -DMICROCHIP_STDIO_BAUD_RATE=$(BAUD_RATE)UL
+CFLAGS += -DMICROCHIP_STDIO_THRU_MMUARTX=\&$(STDIO_UART_SYMBOL)
+CFLAGS += -DMICROCHIP_STDIO_PERIPH=$(STDIO_UART_PERIPH)
+
+# Feature Flags (-D defines)
+CFLAGS += -DENABLE_SPI_FLASH=$(ENABLE_SPI_FLASH)
+CFLAGS += -DENABLE_SDCARD=$(ENABLE_SDCARD)
+CFLAGS += -DENABLE_FATFS=$(ENABLE_FATFS)
+
+# Address Configuration Flags
+CFLAGS += -DSPI_FLASH_BOOT_ADDR=$(SPI_FLASH_BOOT_ADDR)UL
+CFLAGS += -DPAYLOAD_RAM_ADDR=$(PAYLOAD_RAM_ADDR)UL
+CFLAGS += -DCLI_PROMPT="\"$(CLI_PROMPT)\""
+
 
 
 # ------------------------------------------------------------------------------
@@ -292,7 +342,7 @@ BOOTMODE_PROGRAMMER   ?= $(SC_INSTALL_DIR)/extras/mpfs/mpfsBootmodeProgrammer.ja
 # ==============================================================================
 # Core Automation Targets
 # ==============================================================================
-.PHONY: all clean show_size lim lim-app envm envm-lim ddr generate_headers openocd debug gdbinit help program-envm program-envm-lim flash-envm program-job
+.PHONY: all clean show_size lim lim-app envm envm-lim ddr generate_headers openocd debug gdbinit help program-envm program-envm-lim flash-envm program-job print_build_info
 
 help:
 	@echo "========================================================================"
@@ -339,8 +389,25 @@ generate_headers:
 	@echo " Target Board: $(BOARD_DIR)"
 	@echo "=================================================="
 	@$(PYTHON) $(SOC_GEN_SCRIPT) $(XML_CONFIG_DIR) $(CONFIG_OUT_DIR)
+print_build_info:
+	@echo "========================================================================"
+	@echo "                   PolarFire SoC BIOS Build Context                     "
+	@echo "========================================================================"
+	@echo "  * BOARD_NAME                      : $(BOARD) ($(BOARD_DIR))"
+	@echo "  * MPFS_TARGET_DIE / PACKAGE       : $(DIE) / $(PACKAGE)"
+	@echo "  * Target Memory                   : $(MEM_TARGET) (Linker: $(LINKER_SCRIPT))"
+	@echo "  * MICROCHIP_STDIO_THRU_MMUARTX    : $(MSS_UART) (&$(STDIO_UART_SYMBOL), Periph: $(STDIO_UART_PERIPH))"
+	@echo "  * MICROCHIP_STDIO_BAUD_RATE       : $(BAUD_RATE) bps"
+	@echo "  * ENABLE_SPI_FLASH                : $(ENABLE_SPI_FLASH) (Engine: $(SPI_FLASH_ENGINE), Family: $(FLASH_FAMILY))"
+	@echo "  * SPI_FLASH_BOOT_ADDR             : $(SPI_FLASH_BOOT_ADDR)"
+	@echo "  * PAYLOAD_RAM_ADDR                : $(PAYLOAD_RAM_ADDR)"
+	@echo "  * CLI_PROMPT                      : $(CLI_PROMPT)"
+	@echo "  * ENABLE_SDCARD                   : $(ENABLE_SDCARD)"
+	@echo "  * ENABLE_FATFS                    : $(ENABLE_FATFS)"
+	@echo "========================================================================"
 
-all: generate_headers $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).fbi show_size
+
+all: print_build_info generate_headers $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).fbi show_size
 
 $(OBJS): | generate_headers
 

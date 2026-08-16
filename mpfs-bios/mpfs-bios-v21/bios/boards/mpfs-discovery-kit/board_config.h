@@ -27,31 +27,47 @@
 
 
 
-/* Board Details */
-#define BOARD_NAME                      "mpfs-discovery-kit"
-#define MPFS_TARGET_DIE                 "MPFS095T"
-#define MPFS_TARGET_PACKAGE             "FCSG325"
+/* ========================================================================== */
+/* Board  Configuration                                                      */
+/* ========================================================================== */
+#ifndef BOARD_NAME
+    #define BOARD_NAME                      "mpfs-discovery-kit"
+    #define MPFS_TARGET_DIE                 "MPFS095T"
+    #define MPFS_TARGET_PACKAGE             "FCSG325"
+#endif
 
-/* STDIO  UART Configuration */
-#define MICROCHIP_STDIO_THRU_MMUARTX     &g_mss_uart0_lo
-#define MICROCHIP_STDIO_BAUD_RATE        115200UL
+/* Default Prompt: "mpfs-discovery-kit> " */
+#ifndef CLI_PROMPT
+    #define CLI_PROMPT                      BOARD_NAME "> "
+#endif
 
+
+
+/* ========================================================================== */
+/* STDIO & Console UART Hardware Configuration                                */
+/* ========================================================================== */
+#ifndef MICROCHIP_STDIO_THRU_MMUARTX
+    /* Default to MMUART0 (for Icicle Kit / Video Kit/ Discovery Kit) */
+    #define MICROCHIP_STDIO_THRU_MMUARTX    &g_mss_uart0_lo
+    #define MICROCHIP_STDIO_PERIPH         MSS_PERIPH_MMUART0
+    #define MICROCHIP_STDIO_BAUD_RATE      115200UL
+#endif
 
 /* ========================================================================== */
 /* Console UART Hardware Configuration                                        */
 /* ========================================================================== */
-#ifndef CONSOLE_UART_INSTANCE
-    #define CONSOLE_UART_INSTANCE       (&g_mss_uart0_lo)   /* MMUART0 */
-#endif
 
-#ifndef CONSOLE_UART_PERIPH
-    #define CONSOLE_UART_PERIPH         MSS_PERIPH_MMUART0
+#ifndef CONSOLE_UART_INSTANCE
+    #define CONSOLE_UART_INSTANCE       MICROCHIP_STDIO_THRU_MMUARTX
 #endif
 
 #ifndef CONSOLE_UART_BAUD
-    #define CONSOLE_UART_BAUD           MSS_UART_115200_BAUD
+    #define CONSOLE_UART_BAUD           MICROCHIP_STDIO_BAUD_RATE
 #endif
 
+#ifndef CONSOLE_UART_PERIPH
+    #define CONSOLE_UART_PERIPH         MICROCHIP_STDIO_PERIPH
+#endif
 
 
 

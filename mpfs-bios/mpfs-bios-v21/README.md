@@ -5,6 +5,8 @@
 ##### What is new V21
 
 1. Moved the uart port selection inside the board_config.h file. removed the need for uart_mapping.h file.
+2. Add the target-bios-app: bios is run on hart1(u54_1) as a target app. This uses the same Makefile as the BIOS.
+   BIOS uses mss_uart0, app uses mss_uart1.
 
 
 
