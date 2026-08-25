@@ -167,7 +167,9 @@ static void send_tcp_reply_frame(mss_mac_instance_t *mac, const uint8_t *rx_pkt,
 
 /* Background auto-responder for ARP, ICMP Ping, and HTTP Web Server */
 
-/* Background auto-responder with REST API / AJAX Architecture for Rich Data */
+/* Background auto-responder for ARP, ICMP Ping, and Dynamic HTTP Web Dashboard */
+
+/* Background auto-responder for ARP, ICMP Ping, and Compact Hardware Web Dashboard */
 static void process_auto_responses(mss_mac_instance_t *mac, uint8_t *pkt, uint32_t len) {
     if (len < 42) return;
 
@@ -228,7 +230,7 @@ static void process_auto_responses(mss_mac_instance_t *mac, uint8_t *pkt, uint32
                 PRINT_STRING(info);
             }
         }
-        /* 3. HTTP Server (Port 80) */
+        /* 3. HTTP Static Web Server (Port 80) - Optimized Single-Segment Payload */
         else if (protocol == 6 && len >= 54 && memcmp(&pkt[30], g_board_ip, 4) == 0) {
             uint16_t dst_port = (uint16_t)(((uint16_t)pkt[36] << 8) | pkt[37]);
             if (dst_port == 80) {
@@ -243,122 +245,65 @@ static void process_auto_responses(mss_mac_instance_t *mac, uint8_t *pkt, uint32
                 if (flags & 0x02) {
                     send_tcp_reply_frame(mac, pkt, src_port, 0x12 /* SYN+ACK */, 0x10002000, client_seq + 1, NULL, 0);
                 }
-                /* Handle HTTP Requests */
+                /* Handle HTTP Request */
                 else if (payload_len > 0) {
-                    char *req = (char *)&pkt[14 + 20 + tcp_hdr_len];
+                    char *req_payload = (char *)&pkt[14 + 20 + tcp_hdr_len];
 
-                    /* Drop Favicon Requests */
-                    if (strstr(req, "GET /favicon.ico") != NULL) {
-                        const char *nf = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                        send_tcp_reply_frame(mac, pkt, src_port, 0x19, client_ack, client_seq + payload_len, nf, (uint16_t)strlen(nf));
+                    /* Drop favicon requests to stop terminal spam */
+                    if (strstr(req_payload, "GET /favicon.ico") != NULL) {
+                        const char *not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        send_tcp_reply_frame(mac, pkt, src_port, 0x19 /* PSH+ACK+FIN */, client_ack, client_seq + payload_len,
+                                             not_found, (uint16_t)strlen(not_found));
                         return;
                     }
 
-                    /* API Endpoint: GET /api/data (JSON Data Payload) */
-                    if (strstr(req, "GET /api/data") != NULL) {
-                        /* Read GEM Registers */
-                        uint32_t gem_ctrl = gem_read_reg(0x000);
-                        uint32_t gem_cfg  = gem_read_reg(0x004);
-                        uint32_t gem_stat = gem_read_reg(0x008);
-                        uint32_t gem_tx   = gem_read_reg(0x014);
-                        uint32_t gem_rx_q = gem_read_reg(0x018);
-                        uint32_t gem_tx_q = gem_read_reg(0x01C);
-                        uint32_t gem_rx   = gem_read_reg(0x020);
+                    /* Read Hardware Registers */
+                    uint32_t gem_ctrl = gem_read_reg(0x000);
+                    uint32_t gem_cfg  = gem_read_reg(0x004);
+                    uint32_t gem_stat = gem_read_reg(0x008);
 
-                        /* Read PHY Registers */
-                        uint16_t phy_bmcr   = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_BMCR);
-                        uint16_t phy_bmsr   = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_BMSR);
-                        uint16_t phy_id1    = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_PHYSID1);
-                        uint16_t phy_id2    = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_PHYSID2);
-                        uint16_t phy_adv    = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_ADVERTISE);
-                        uint16_t phy_ctrl1k = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_CTRL1000);
-                        uint16_t phy_stat1k = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_STAT1000);
+                    uint16_t phy_bmcr = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_BMCR);
+                    uint16_t phy_bmsr = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_BMSR);
+                    uint16_t phy_id1  = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_PHYSID1);
+                    uint16_t phy_id2  = MSS_MAC_read_phy_reg(mac, g_phy_addr, MII_PHYSID2);
 
-                        /* Read MIB Stats Registers */
-                        uint32_t tx_oct_lo = gem_read_reg(0x100);
-                        uint32_t tx_oct_hi = gem_read_reg(0x104);
-                        uint32_t rx_oct_lo = gem_read_reg(0x118);
-                        uint32_t rx_oct_hi = gem_read_reg(0x11C);
-                        uint32_t crc_err   = gem_read_reg(0x14C);
-                        uint32_t align_err = gem_read_reg(0x150);
-                        uint32_t overrun   = gem_read_reg(0x164);
-
-                        uint64_t tx_octets = ((uint64_t)tx_oct_hi << 32) | tx_oct_lo;
-                        uint64_t rx_octets = ((uint64_t)rx_oct_hi << 32) | rx_oct_lo;
-
-                        static char api_json[850];
-                        snprintf(api_json, sizeof(api_json),
-                            "HTTP/1.1 200 OK\r\n"
-                            "Content-Type: application/json\r\n"
-                            "Connection: close\r\n\r\n"
-                            "{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"ip\":\"%u.%u.%u.%u\","
-                            "\"link\":\"%s\",\"speed\":\"%s\",\"duplex\":\"%s\","
-                            "\"tx_cnt\":%lu,\"rx_cnt\":%lu,"
-                            "\"gem\":[\"0x%08X\",\"0x%08X\",\"0x%08X\",\"0x%08X\",\"0x%08X\",\"0x%08X\",\"0x%08X\"],"
-                            "\"phy\":[\"0x%04X\",\"0x%04X\",\"0x%04X:0x%04X\",\"0x%04X\",\"0x%04X/0x%04X\"],"
-                            "\"tx_oct\":\"%llu\",\"rx_oct\":\"%llu\",\"crc\":%u,\"align\":%u,\"ovr\":%u}",
-                            mac->mac_addr[0], mac->mac_addr[1], mac->mac_addr[2],
-                            mac->mac_addr[3], mac->mac_addr[4], mac->mac_addr[5],
-                            g_board_ip[0], g_board_ip[1], g_board_ip[2], g_board_ip[3],
-                            g_test_linkup ? "UP" : "DOWN",
-                            (g_test_speed == MSS_MAC_1000MBPS) ? "1Gbps" : "100Mbps",
-                            g_test_fullduplex ? "Full" : "Half",
-                            (unsigned long)g_tx_count, (unsigned long)g_rx_count,
-                            (unsigned int)gem_ctrl, (unsigned int)gem_cfg, (unsigned int)gem_stat,
-                            (unsigned int)gem_tx, (unsigned int)gem_rx_q, (unsigned int)gem_tx_q, (unsigned int)gem_rx,
-                            (unsigned int)phy_bmcr, (unsigned int)phy_bmsr,
-                            (unsigned int)phy_id1, (unsigned int)phy_id2,
-                            (unsigned int)phy_adv, (unsigned int)phy_ctrl1k, (unsigned int)phy_stat1k,
-                            (unsigned long long)tx_octets, (unsigned long long)rx_octets,
-                            (unsigned int)crc_err, (unsigned int)align_err, (unsigned int)overrun);
-
-                        send_tcp_reply_frame(mac, pkt, src_port, 0x19, client_ack, client_seq + payload_len,
-                                             api_json, (uint16_t)strlen(api_json));
-                        return;
-                    }
-
-                    /* Main UI Shell: GET / (HTML + Auto-Fetch Script) */
-                    static const char *ui_shell =
+                    static char html_page[950];
+                    snprintf(html_page, sizeof(html_page),
                         "HTTP/1.1 200 OK\r\n"
                         "Content-Type: text/html\r\n"
                         "Connection: close\r\n\r\n"
-                        "<!DOCTYPE html><html><head><title>PolarFire SoC Dashboard</title>"
+                        "<!DOCTYPE html><html><head><title>PolarFire SoC</title>"
                         "<style>body{font:12px monospace;background:#0d1117;color:#c9d1d9;padding:15px}"
-                        "h3{color:#58a6ff;margin:10px 0 4px 0}.card{background:#161b22;padding:10px;border-radius:6px;border:1px solid #30363d;margin-bottom:10px}"
-                        "table{border-collapse:collapse;width:100%%;margin-bottom:10px}td,th{padding:4px;border:1px solid #30363d;text-align:left}</style></head><body>"
-                        "<h3>PolarFire SoC GEM0 System Dashboard</h3>"
-                        "<div class=\"card\" id=\"meta\">Loading system metrics...</div>"
-                        "<h3>GEM0 MAC Registers</h3>"
+                        "h3{color:#58a6ff;margin:8px 0}table{border-collapse:collapse;width:100%%;margin-bottom:12px}"
+                        "td,th{padding:5px;border:1px solid #30363d;text-align:left}</style></head><body>"
+                        "<h3>PolarFire SoC GEM0 & PHY Status</h3>"
+                        "<p>MAC: %02X:%02X:%02X:%02X:%02X:%02X | IP: %u.%u.%u.%u | Link: %s (%s %s)</p>"
+                        "<h3>GEM0 Registers</h3>"
                         "<table><tr><th>Register</th><th>Offset</th><th>Value</th></tr>"
-                        "<tr><td>NET_CTRL / NET_CFG / NET_STAT</td><td>0x000..08</td><td id=\"g0\">-</td></tr>"
-                        "<tr><td>TX_STAT / RX_STAT</td><td>0x014 / 0x020</td><td id=\"g1\">-</td></tr>"
-                        "<tr><td>RX_Q_PTR / TX_Q_PTR</td><td>0x018 / 0x01C</td><td id=\"g2\">-</td></tr></table>"
-                        "<h3>VSC8221 PHY Registers</h3>"
+                        "<tr><td>NET_CTRL</td><td>0x000</td><td>0x%08X</td></tr>"
+                        "<tr><td>NET_CFG</td><td>0x004</td><td>0x%08X</td></tr>"
+                        "<tr><td>NET_STAT</td><td>0x008</td><td>0x%08X</td></tr></table>"
+                        "<h3>VSC8221 PHY Registers (0x%02X)</h3>"
                         "<table><tr><th>Register</th><th>Reg</th><th>Value</th></tr>"
-                        "<tr><td>BMCR / BMSR</td><td>0x00 / 0x01</td><td id=\"p0\">-</td></tr>"
-                        "<tr><td>PHYSID1 / PHYSID2</td><td>0x02 / 0x03</td><td id=\"p1\">-</td></tr>"
-                        "<tr><td>AN_ADV / 1000 CTRL/STAT</td><td>0x04 / 0x09..0A</td><td id=\"p2\">-</td></tr></table>"
-                        "<h3>Hardware MIB Statistics</h3>"
-                        "<table><tr><th>Metric</th><th>Value</th></tr>"
-                        "<tr><td>TX Octets / RX Octets</td><td id=\"s0\">-</td></tr>"
-                        "<tr><td>CRC Errs / Align Errs / Overruns</td><td id=\"s1\">-</td></tr></table>"
-                        "<script>function update(){fetch('/api/data').then(r=>r.json()).then(d=>{"
-                        "document.getElementById('meta').innerHTML='<b>MAC:</b> '+d.mac+' | <b>IP:</b> '+d.ip+' | <b>Link:</b> '+d.link+' ('+d.speed+' '+d.duplex+') | <b>TX/RX Pkts:</b> '+d.tx_cnt+' / '+d.rx_cnt;"
-                        "document.getElementById('g0').innerText=d.gem[0]+' / '+d.gem[1]+' / '+d.gem[2];"
-                        "document.getElementById('g1').innerText=d.gem[3]+' / '+d.gem[6];"
-                        "document.getElementById('g2').innerText=d.gem[4]+' / '+d.gem[5];"
-                        "document.getElementById('p0').innerText=d.phy[0]+' / '+d.phy[1];"
-                        "document.getElementById('p1').innerText=d.phy[2];"
-                        "document.getElementById('p2').innerText=d.phy[3]+' / '+d.phy[4];"
-                        "document.getElementById('s0').innerText=d.tx_oct+' B / '+d.rx_oct+' B';"
-                        "document.getElementById('s1').innerText=d.crc+' / '+d.align+' / '+d.ovr;"
-                        "});}update();setInterval(update,2000);</script></body></html>";
+                        "<tr><td>BMCR / BMSR</td><td>0x00 / 0x01</td><td>0x%04X / 0x%04X</td></tr>"
+                        "<tr><td>PHYSID1 / PHYSID2</td><td>0x02 / 0x03</td><td>0x%04X : 0x%04X</td></tr></table>"
+                        "</body></html>",
+                        mac->mac_addr[0], mac->mac_addr[1], mac->mac_addr[2],
+                        mac->mac_addr[3], mac->mac_addr[4], mac->mac_addr[5],
+                        g_board_ip[0], g_board_ip[1], g_board_ip[2], g_board_ip[3],
+                        g_test_linkup ? "UP" : "DOWN",
+                        (g_test_speed == MSS_MAC_1000MBPS) ? "1Gbps" : "100Mbps",
+                        g_test_fullduplex ? "Full" : "Half",
+                        (unsigned int)gem_ctrl, (unsigned int)gem_cfg, (unsigned int)gem_stat,
+                        g_phy_addr,
+                        (unsigned int)phy_bmcr, (unsigned int)phy_bmsr,
+                        (unsigned int)phy_id1, (unsigned int)phy_id2);
 
-                    send_tcp_reply_frame(mac, pkt, src_port, 0x19, client_ack, client_seq + payload_len,
-                                         ui_shell, (uint16_t)strlen(ui_shell));
+                    send_tcp_reply_frame(mac, pkt, src_port, 0x19 /* PSH+ACK+FIN */, client_ack, client_seq + payload_len,
+                                         html_page, (uint16_t)strlen(html_page));
 
                     char info[128];
-                    sprintf(info, "\r\n[HTTP RX] Served UI Shell to %u.%u.%u.%u:%u\r\neth-disco> ",
+                    sprintf(info, "\r\n[HTTP RX] Served Dashboard to %u.%u.%u.%u:%u\r\neth-disco> ",
                             pkt[26], pkt[27], pkt[28], pkt[29], src_port);
                     PRINT_STRING(info);
                 }
