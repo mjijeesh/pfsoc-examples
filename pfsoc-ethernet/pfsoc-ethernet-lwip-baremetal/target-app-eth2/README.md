@@ -360,9 +360,7 @@ eth-cli> status
 > 1. **Auto-DHCP at Boot**: The application initiates a DHCP DISCOVER request automatically upon system startup.  
 > 2. **10-Second Timeout Fallback**: If no DHCP server responds within 10 seconds (10000 ms), the stack stops DHCP and assigns the default static network configuration:  
    * **IPv4 Address**: 192.168.20.44
-
    * **Subnet Mask**: 255.255.255.0
-
    * **Default Gateway**: 192.168.20.1
 
 > 3. **Manual DHCP Trigger**: Executing dhcp at any time re-initiates discovery. If bound, it clears the old address and requests a new lease.
@@ -378,20 +376,22 @@ eth-cli> status
 The dashboard page will render. The terminal will display a real-time event notification:
 
 ```
-[HTTP EVENT] Web server page accessed by 192.168.20.100
+[HTTP EVENT] Web server page accessed by 192.168.20.100
 ```
 
 2\. ICMP Ping Testing  
 Inbound Ping (Host PC $\\rightarrow$ Board): Run ping \<board\_ip\> from your host terminal. The CLI outputs an event for incoming requests:
 
 ```
-[PING EVENT] Inbound Ping Request received from 192.168.20.100
+[PING EVENT] Inbound Ping Request received from 192.168.20.100
 ```
 
 Outbound Ping (Board $\\rightarrow$ Host PC): Execute ping \<target\_ip\> in the board's CLI:
 
 ```
-eth-cli> ping 192.168.20.1[DEBUG] Transmitting ICMP Echo Request to 192.168.20.1 (Seq: 1)[DEBUG] ICMP Echo Reply received from 192.168.20.1 (Seq: 1)
+eth-cli> ping 192.168.20.1
+[DEBUG] Transmitting ICMP Echo Request to 192.168.20.1 (Seq: 1)
+[DEBUG] ICMP Echo Reply received from 192.168.20.1 (Seq: 1)
 ```
 
 ### **3\. iPerf Bandwidth Benchmark (Port 5001\)**
@@ -401,13 +401,14 @@ eth-cli> ping 192.168.20.1[DEBUG] Transmitting ICMP Echo Request to 192.168.20.
 Run an iPerf TCP test from the host PC targeted at Port 5001:
 
 ```
-iperf -c <board_ip> -p 5001 -i 1
+iperf -c <board_ip> -p 5001 -i 1
 ```
 
 The board logs the incoming connection request and outputs a completion summary report:
 
 ```
-[IPERF EVENT] Connection request on Port 5001 from 192.168.20.100[IPERF REPORT] Transferred: 10240 KB | Duration: 1001 ms | Bandwidth: 8.83 Mbps
+[IPERF EVENT] Connection request on Port 5001 from 192.168.20.100
+[IPERF REPORT] Transferred: 10240 KB | Duration: 1001 ms | Bandwidth: 8.83 Mbps
 ```
 
 
