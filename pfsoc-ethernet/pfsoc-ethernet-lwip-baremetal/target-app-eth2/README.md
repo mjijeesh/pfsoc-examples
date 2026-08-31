@@ -144,32 +144,8 @@ Thread 2 hit Breakpoint 1, 0x80001234 in main_loop ()
 
 > 1. Control execution directly from the GDB prompt.
 
-# **5\. Essential GDB Commands Reference**
 
-| Category | Command | Description |
-| :---- | :---- | :---- |
-| **Connection & Setup** | set $target\_riscv=1 | Configures GDB for RISC-V target architecture. |
-|  | set mem inaccessible-by-default off | Allows memory access outside declared XML regions. |
-|  | target extended-remote localhost:3333 | Connects to running OpenOCD server. |
-|  | file build/ddr/pfsoc\_app.elf | Loads local debug symbols. |
-| **Execution Control** | interrupt | Pauses CPU execution across all harts. |
-|  | load | Writes ELF sections into active DDR memory. |
-|  | thread apply all set $pc \= \_start | Resets Program Counter to application entry point. |
-|  | continue (or c) | Resumes program execution. |
-|  | step (or s) / next (or n) | Single-step into / step over source code line. |
-| **Hart Management** | info threads | Lists active RISC-V harts (Hart 0: E51, Hart 1-4: U54). |
-|  | thread 2 | Switches GDB context to Hart 1 (U54\_1 core). |
-| **Breakpoints & Watch** | break u54\_1 | Sets breakpoint at Hart 1 entry function. |
-|  | break send\_ping | Sets breakpoint at ping function. |
-|  | watch g\_rx\_q\_head | Pauses execution when g\_rx\_q\_head changes. |
-|  | info breakpoints / delete \<id\> | List or remove breakpoints. |
-| **Inspection & Trace** | backtrace (or bt) | Displays current call stack. |
-|  | print g\_tick\_counter | Prints live timer counter. |
-|  | print \*g\_test\_mac | Prints entire Ethernet MAC structure. |
-|  | x/16xw 0x80000000 | Examines 16 hex words at physical DDR start address. |
-|  | x/64xb 0x0A000000 | Examines 64 raw bytes at Scratchpad SRAM start address. |
-
-## **5.1 Hardware Hart & Thread Mapping**
+## **5. Hardware Hart & Thread Mapping**
 
 The Microchip PolarFire SoC features a 5-core RISC-V CPU complex (1x E51 Monitor Core \+ 4x U54 Application Cores). When attached via GDB and OpenOCD on port 3333, each physical core is exposed as an OS Thread:
 
