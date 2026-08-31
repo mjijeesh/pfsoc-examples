@@ -322,8 +322,30 @@ Connect a micro-USB cable to the board's UART interface and open a serial termin
 Upon boot or reload, the board displays the initialization banner and CLI prompt (eth-cli\>):
 
 ```
+=======================================================PolarFire SoC - Bare-Metal lwIP Engine =======================================================
+[DEBUG] lwIP Network Stack Initialized Successfully.
+[DHCP] Initiating Auto-DHCP Discovery (10s Timeout limit)...
+[DEBUG] HTTP Web Server (Port 80) Started.
+[DEBUG] iPerf Bandwidth Server (Port 5001) Started.
+Type 'help' for available CLI commands.
+eth-cli> 
+```
 
-======================================================= PolarFire SoC - Bare-Metal lwIP Engine=======================================================[DEBUG] lwIP Network Stack Initialized Successfully.[DHCP] Initiating Auto-DHCP Discovery (10s Timeout limit)...[DEBUG] HTTP Web Server (Port 80) Started.[DEBUG] iPerf Bandwidth Server (Port 5001) Started.Type 'help' for available CLI commands.eth-cli> 
+```
+eth-cli> status
+
+[NETWORK INTERFACE STATUS]
+  Interface Name : e0
+  Hardware (MAC) : 00:FC:00:12:34:58
+  Link Status    : UP (Connected)
+  IPv4 Address   : 192.168.20.44
+  Subnet Mask    : 255.255.255.128
+  Default Gateway: 192.168.20.1
+  DHCP Client    : BOUND (Active)
+  Traffic Monitor: DISABLED (OFF)
+  Tx Frame Count : 7
+  Rx Frame Count : 656
+
 ```
 
 ## **Interactive Command Reference**
