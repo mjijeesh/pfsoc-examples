@@ -309,20 +309,16 @@ $5 = 8
 Connect a micro-USB cable to the board's UART interface and open a serial terminal emulator (e.g., Minicom, Tera Term, PuTTY).
 
 > * **Port**: Interactive MMUART1 (\&g\_mss\_uart1\_lo)  
-> * **Baud Rate**: 115200
-
-> * **Data Bits**: 8
-
-> * **Parity**: None
-
-> * **Stop Bits**: 1
-
-> * **Flow Control**: None
+     **Baud Rate**: 115200
+     **Data Bits**: 8
+     **Parity**: None
+    **Stop Bits**: 1
+    **Flow Control**: None
 
 Upon boot or reload, the board displays the initialization banner and CLI prompt (eth-cli\>):
 
 ```
-=======================================================PolarFire SoC - Bare-Metal lwIP Engine =======================================================
+==========PolarFire SoC - Bare-Metal lwIP Engine =================
 [DEBUG] lwIP Network Stack Initialized Successfully.
 [DHCP] Initiating Auto-DHCP Discovery (10s Timeout limit)...
 [DEBUG] HTTP Web Server (Port 80) Started.
