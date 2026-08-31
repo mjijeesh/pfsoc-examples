@@ -302,3 +302,94 @@ $4 = {0x00, 0xfc, 0x00, 0x12, 0x34, 0x58}
 $5 = 8
 ```
 
+# **Application Usage Instructions**
+
+## **Serial Console Connection**
+
+Connect a micro-USB cable to the board's UART interface and open a serial terminal emulator (e.g., Minicom, Tera Term, PuTTY).
+
+> * **Port**: Interactive MMUART1 (\&g\_mss\_uart1\_lo)  
+> * **Baud Rate**: 115200
+
+> * **Data Bits**: 8
+
+> * **Parity**: None
+
+> * **Stop Bits**: 1
+
+> * **Flow Control**: None
+
+Upon boot or reload, the board displays the initialization banner and CLI prompt (eth-cli\>):
+
+```
+
+======================================================= PolarFire SoC - Bare-Metal lwIP Engine=======================================================[DEBUG] lwIP Network Stack Initialized Successfully.[DHCP] Initiating Auto-DHCP Discovery (10s Timeout limit)...[DEBUG] HTTP Web Server (Port 80) Started.[DEBUG] iPerf Bandwidth Server (Port 5001) Started.Type 'help' for available CLI commands.eth-cli> 
+```
+
+## **Interactive Command Reference**
+
+| Command | Usage Syntax | Description |
+| :---- | :---- | :---- |
+| **help** | help or ? | Displays the command menu and active background service ports. |
+| **status** | status | Displays interface name, MAC address, IPv4 address, Subnet Mask, Default Gateway, DHCP lease state, Traffic Monitor toggle, and total Hardware TX/RX frame counters. |
+| **dhcp** | dhcp | Manually triggers a DHCP DISCOVER request to acquire a dynamic IP from the router. |
+| **ping** | ping \<ip1.ip2.ip3.ip4\> | Transmits an outbound ICMP Echo Request frame to a target IPv4 address. |
+| **arp** | arp \<ip1.ip2.ip3.ip4\> | Sends a Layer 2 ARP Request frame to resolve the hardware MAC address of a target IP. |
+| **monitor** | monitor \<on|off\> | Enallows or disables real-time background packet inspection prints on the CLI console. |
+
+## **IP Allocation Behavior & Fallback**
+
+> 1. **Auto-DHCP at Boot**: The application initiates a DHCP DISCOVER request automatically upon system startup.  
+> 2. **10-Second Timeout Fallback**: If no DHCP server responds within 10 seconds (10000 ms), the stack stops DHCP and assigns the default static network configuration:  
+   * **IPv4 Address**: 192.168.20.44
+
+   * **Subnet Mask**: 255.255.255.0
+
+   * **Default Gateway**: 192.168.20.1
+
+> 3. **Manual DHCP Trigger**: Executing dhcp at any time re-initiates discovery. If bound, it clears the old address and requests a new lease.
+
+## **Service Testing Procedures**
+
+### **1\. HTTP Web Server (Port 80\)**
+
+> 1. Connect the board to your local network router or directly to a host PC via Ethernet.  
+> 2. Verify the board's active IP using status.  
+> 3. Open a web browser on your host computer and navigate to http://\<board\_ip\> (e.g., \[http://192.168.20.44\](http://192.168.20.44)).
+
+The dashboard page will render. The terminal will display a real-time event notification:
+
+```
+[HTTP EVENT] Web server page accessed by 192.168.20.100
+```
+
+2\. ICMP Ping Testing  
+Inbound Ping (Host PC $\\rightarrow$ Board): Run ping \<board\_ip\> from your host terminal. The CLI outputs an event for incoming requests:
+
+```
+[PING EVENT] Inbound Ping Request received from 192.168.20.100
+```
+
+Outbound Ping (Board $\\rightarrow$ Host PC): Execute ping \<target\_ip\> in the board's CLI:
+
+```
+eth-cli> ping 192.168.20.1[DEBUG] Transmitting ICMP Echo Request to 192.168.20.1 (Seq: 1)[DEBUG] ICMP Echo Reply received from 192.168.20.1 (Seq: 1)
+```
+
+### **3\. iPerf Bandwidth Benchmark (Port 5001\)**
+
+> 1. Ensure the board is in BOUND DHCP or active static IP mode.
+
+Run an iPerf TCP test from the host PC targeted at Port 5001:
+
+```
+iperf -c <board_ip> -p 5001 -i 1
+```
+
+The board logs the incoming connection request and outputs a completion summary report:
+
+```
+[IPERF EVENT] Connection request on Port 5001 from 192.168.20.100[IPERF REPORT] Transferred: 10240 KB | Duration: 1001 ms | Bandwidth: 8.83 Mbps
+```
+
+
