@@ -2,6 +2,10 @@
 
 This guide details the procedures for building, loading, and debugging bare-metal lwIP networking applications on the PolarFire SoC Discovery Kit (MPFS095T) when targeting DDR memory.
 
+Note : The ethernet mac ringle buffer is implmented in the lim scratch pad area.
+there is a new section created i nthe linker file for this. refer to the ddr linker file under mpfs-discovery-kit
+
+
 ## **1\. System Architecture & Memory Map**
 
 The application runs on **Hart 1 (U54 Core 1\)**. When compiled for the DDR target (MEM\_TARGET=ddr), the executable image resides in cached DDR memory, while Ethernet DMA buffers are mapped to L2 Scratchpad SRAM to ensure hardware coherency.
