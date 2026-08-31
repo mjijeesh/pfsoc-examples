@@ -61,15 +61,8 @@ Because executing code in DDR requires active clocking and DDR controller traini
 
 **Important**: Do NOT run monitor reset halt in GDB when debugging DDR targets. A full JTAG reset clears the MSS DDR Controller registers, disabling DDR access and causing GDB memory bus errors.
 
-## **4.1 Debugging Automation**
 
-Append these debugging automation targets to your Makefile:
-
-```shell
-# Attach to trained board and load new ELF into DDR over JTAGdebug-ddr:	@ELF_PATH="build/ddr/$(TARGET).elf"; \	if [ ! -f "$$ELF_PATH" ]; then \		echo "ERROR: Executable not found at $$ELF_PATH. Run 'make ddr' first."; \		exit 1; \	fi; \	echo "=================================================="; \	echo " Attaching to Trained DDR Target: $$ELF_PATH"; \	echo "=================================================="; \	$(GDB) $$ELF_PATH \		-ex 'set $$target_riscv=1' \		-ex 'set mem inaccessible-by-default off' \		-ex 'target extended-remote localhost:$(GDB_PORT)' \		-ex 'interrupt' \		-ex 'load' \		-ex 'thread apply all set $$pc = _start' \		-ex 'break u54_1' \		-ex 'continue'# Live attach to running DDR code without re-downloading imageattach-ddr:	$(GDB) build/ddr/$(TARGET).elf \		-ex 'set $$target_riscv=1' \		-ex 'set mem inaccessible-by-default off' \		-ex 'target extended-remote localhost:$(GDB_PORT)' \		-ex 'interrupt'
-```
-
-## **4.2 Workflow A: Attach & Load (Binary Deployment)**
+## **4.1 Workflow A: Attach & Load (Binary Deployment)**
 
 Use this workflow to re-compile your C code and load the updated binary directly into DDR over JTAG without losing DDR controller initialization.
 
@@ -77,7 +70,7 @@ Use this workflow to re-compile your C code and load the updated binary directly
 
 **Step 1: Start OpenOCD (Terminal 1\)**
 
-```shell
+```
 make openocd
 ```
 
@@ -92,7 +85,7 @@ Info : Listening on port 6666 for tcl connections
 
 **Step 2: Compile & Push to DDR (Terminal 2\)**
 
-```shell
+```
 make ddrmake debug-ddr
 ```
 
@@ -124,7 +117,7 @@ Build Complete.
 
 GDB will pause execution, flash pfsoc\_app.elf into DDR over JTAG, reset the PC to \_start, and pause at u54\_1().
 
-## **4.3 Workflow B: Live Attach (System Inspection)**
+## **4.2 Workflow B: Live Attach (System Inspection)**
 
 Use this workflow when the bootloader has already launched the application and you want to inspect variables, set breakpoints, or trace crashes without re-writing memory.  
 **Step 1: Start OpenOCD (Terminal 1\)**
