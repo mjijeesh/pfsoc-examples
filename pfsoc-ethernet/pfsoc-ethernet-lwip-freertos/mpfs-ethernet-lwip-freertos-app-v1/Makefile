@@ -52,7 +52,7 @@ else
     BUILD_DIR     := build/lim
     CONFIG_DIR    := lim-debug
     LINKER_SCRIPT := $(BOARD_DIR)/platform_config/$(CONFIG_DIR)/linker/mpfs-lim.ld
-    CFLAGS        += -DIMAGE_LOADED_BY_BOOTLOADER=1
+    #CFLAGS        += -DIMAGE_LOADED_BY_BOOTLOADER=1
 endif
 
 export MEM_TARGET

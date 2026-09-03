@@ -67,11 +67,15 @@ static volatile uint32_t g_rx_q_head = 0;
 static volatile uint32_t g_rx_q_tail = 0;
 
 /* Hardware Ring Buffers in Uncached Memory */
-static uint8_t g_mac_rx_buffer[MSS_MAC_RX_RING_SIZE][MSS_MAC_MAX_RX_BUF_SIZE] 
-    __attribute__((aligned(16), section(".uncached_scrp")));
+//static uint8_t g_mac_rx_buffer[MSS_MAC_RX_RING_SIZE][MSS_MAC_MAX_RX_BUF_SIZE] 
+//    __attribute__((aligned(16), section(".uncached_scrp")));
 
-static uint8_t g_mac_tx_buffer[TX_RING_SLOTS][TX_SLOT_SIZE] 
-    __attribute__((aligned(16), section(".uncached_scrp")));
+//static uint8_t g_mac_tx_buffer[TX_RING_SLOTS][TX_SLOT_SIZE] 
+//    __attribute__((aligned(16), section(".uncached_scrp")));
+
+static uint8_t g_mac_rx_buffer[MSS_MAC_RX_RING_SIZE][MSS_MAC_MAX_RX_BUF_SIZE] __attribute__((aligned(16)));
+static uint8_t g_mac_tx_buffer[TX_RING_SLOTS][TX_SLOT_SIZE] __attribute__((aligned(16)));
+
 
 static volatile uint32_t g_tx_ring_head = 0;
 

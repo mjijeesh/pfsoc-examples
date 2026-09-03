@@ -213,7 +213,7 @@ CFLAGS += $(ARCH_FLAGS) \
           
 CFLAGS += $(INC_FLAGS) $(GLOBAL_DEFS)
 
-LDFLAGS := $(ARCH_FLAGS) \
+LDFLAGS += $(ARCH_FLAGS) \
            -O0 \
            -g3 \
            -nostartfiles \
@@ -223,6 +223,8 @@ LDFLAGS := $(ARCH_FLAGS) \
            --specs=nano.specs \
            --specs=nosys.specs \
            -Wl,--no-warn-rwx-segments
+
+
 
 # ==============================================================================
 # eNVM Boot Mode Programmer & Hardware Tooling Configuration
