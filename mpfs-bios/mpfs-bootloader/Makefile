@@ -22,14 +22,16 @@ ifeq ($(OS),Windows_NT)
 	JAVA                  ?= C:/Microchip/SoftConsole-v2022.2-RISC-V-747/eclipse/jre/bin/java.exe
     OPENOCD               ?= C:/Microchip/SoftConsole-v2022.2-RISC-V-747/openocd/bin/openocd.exe
     SC_INSTALL_DIR        ?= C:/Microchip/SoftConsole-v2022.2-RISC-V-747
-    FPGENPROG             ?= C:/Microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/fpgenprog    
+    FPGENPROG             ?= C:/Microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/fpgenprog 
+	FPEXPRESS             ?= C:/Microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin/fpexpress.exe   
 	
 else
     PYTHON                ?= python3
 	JAVA                  ?= java
     OPENOCD               ?= /opt/microchip/SoftConsole/SoftConsole-v2022/openocd/bin/openocd
     SC_INSTALL_DIR        ?= /opt/microchip/SoftConsole/SoftConsole-v2022
-    FPGENPROG             ?= /opt/microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/fpgenprog    
+    FPGENPROG             ?= /opt/microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/fpgenprog
+	FPEXPRESS             ?= /opt/Microchip/Libero_SoC_2025.2/Libero_SoC/Designer/bin64/fpexpress    
 endif
 # Sanitize backslashes from Windows environment variables
 SC_INSTALL_DIR := $(subst \,/,$(SC_INSTALL_DIR))
@@ -51,6 +53,7 @@ JOB_FILE ?= $(BOARD_DIR)/fpga_design/$(BOARD).job
 # export Variable for External tools (e.g., Libero SoC, SoftConsole, etc.)
 export SC_INSTALL_DIR
 export FPGENPROG
+export FPEXPRESS
 export BOOTMODE_PROGRAMMER
 
 # Automatically uses riscv64-unknown-elf- or riscv-none-elf- based on system PATH
@@ -458,6 +461,22 @@ flash-envm:
 		-ex 'load' \
 		-ex 'detach' \
 		-ex 'quit'
+
+program-job:
+	@echo "=================================================="
+	@echo " Programming FPGA Fabric with Job File"
+	@echo " Job File     : $(JOB_FILE)"
+	@echo " Target Board : $(BOARD)"
+	@echo "=================================================="
+	@if [ ! -f "$(JOB_FILE)" ]; then \
+		echo "[ERROR] Job file '$(JOB_FILE)' was not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p build/fp_job
+	@echo "create_job_project -job_project_location {$(CURDIR)/build/fp_job} -job_file {$(CURDIR)/$(JOB_FILE)} -overwrite 1" > build/fp_job/program_job.tcl
+	@echo "run_selected_actions" >> build/fp_job/program_job.tcl
+	@echo "close_project" >> build/fp_job/program_job.tcl
+	$(FPEXPRESS) SCRIPT:build/fp_job/program_job.tcl
 
 # ------------------------------------------------------------------------------
 # Debugging Automation Targets

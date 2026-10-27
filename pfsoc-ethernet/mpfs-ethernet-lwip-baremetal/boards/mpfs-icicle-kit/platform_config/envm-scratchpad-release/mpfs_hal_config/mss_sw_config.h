@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2019-2023 Microchip FPGA Embedded Systems Solutions.
+ * Copyright 2019-2022 Microchip FPGA Embedded Systems Solutions.
  *
  * SPDX-License-Identifier: MIT
  *
@@ -115,7 +115,7 @@
 /* if this program is running on one hart only, only that particular hart value
  * will be used */
 #define HART0_TICK_RATE_MS  5UL
-#define HART1_TICK_RATE_MS  5UL
+#define HART1_TICK_RATE_MS  100UL
 #define HART2_TICK_RATE_MS  5UL
 #define HART3_TICK_RATE_MS  5UL
 #define HART4_TICK_RATE_MS  5UL

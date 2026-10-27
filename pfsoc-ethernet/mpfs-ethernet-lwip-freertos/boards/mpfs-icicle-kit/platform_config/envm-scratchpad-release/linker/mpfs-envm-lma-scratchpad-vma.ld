@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2019-2023 Microchip FPGA Embedded Systems Solutions.
+ * Copyright 2019-2021 Microchip FPGA Embedded Systems Solutions.
  *
  * SPDX-License-Identifier: MIT
  *
@@ -8,10 +8,10 @@
  */
 /*******************************************************************************
  * 
- * file name : mpfs-envm-lma-scratchpad-vma.ld
- * Code starts from eNVM and relocates itself to an L2 cache scratchpad mapped in
- * the Zero Device address range.
- * 
+ * file name : mpfs_envm.ld
+ * Use with Bare metal startup code.
+ * Startup code runs from envm on MSS reset
+ *
  * You can find details on the PolarFireSoC Memory map in the mpfs-memory-hierarchy.md
  * which can be found under the link below:
  * https://github.com/polarfire-soc/polarfire-soc-documentation
@@ -43,19 +43,22 @@ See the mpfs-lim.ld example linker script when runing from LIM.
 
 ------------------------------------------------------------------------------*/
 
+
 MEMORY
 {
+    /* In this example, our reset vector is set to point to the */
+    /* start at page 1 of the envm */
     envm (rx) : ORIGIN  = 0x20220100, LENGTH = 128k - 0x100
     dtim (rwx) : ORIGIN  = 0x01000000, LENGTH = 7k       
-    /* This 1K of DTIM is used to run code when switching the envm clock */
-    switch_code_dtim (rx) : ORIGIN = 0x01001c00, LENGTH = 1k 
     e51_itim (rwx)     : ORIGIN = 0x01800000, LENGTH = 28k
     u54_1_itim (rwx)   : ORIGIN = 0x01808000, LENGTH = 28k
     u54_2_itim (rwx)   : ORIGIN = 0x01810000, LENGTH = 28k
     u54_3_itim (rwx)   : ORIGIN = 0x01818000, LENGTH = 28k
     u54_4_itim (rwx)   : ORIGIN = 0x01820000, LENGTH = 28k
-    l2lim (rwx)        : ORIGIN = 0x08000000, LENGTH = 256k
-    scratchpad(rwx)    : ORIGIN = 0x0A000000, LENGTH = 256k
+    l2lim (rwx)        : ORIGIN = 0x08000000, LENGTH = 1920k
+    scratchpad(rwx)    : ORIGIN = 0x0A000000, LENGTH = 0k
+    /* This 1K of DTIM is used to run code when switching the envm clock */
+    switch_code_dtim (rx) : ORIGIN = 0x01001c00, LENGTH = 1k 
     /* DDR sections example */
     ddr_cached_32bit (rwx) : ORIGIN  = 0x80000000, LENGTH = 768M
     ddr_non_cached_32bit (rwx) : ORIGIN  = 0xC0000000, LENGTH = 256M
@@ -64,56 +67,38 @@ MEMORY
     ddr_non_cached_38bit (rwx) : ORIGIN  = 0x1400000000, LENGTH = 0k
     ddr_wcb_38bit (rwx) : ORIGIN  = 0x1800000000, LENGTH  = 0k
 }
-
+                               
 HEAP_SIZE           = 8k;   /* needs to be calculated for your application */
+
+/* STACK_SIZE_PER_HART needs to be calculated for your */
+/* application. Must be aligned */
+/* Also Thread local storage (AKA hart local storage) allocated for each hart */
+/* as part of the stack
+/* So memory map will look like once apportion in startup code: */
+/*   */
+/* stack hart0  Actual Stack size = (STACK_SIZE_PER_HART - HLS_DEBUG_AREA_SIZE) */
+/* TLS hart 0   */
+/* stack hart1  */
+/* TLS hart 1   */
+/* etc */
+/* note: HLS_DEBUG_AREA_SIZE is defined in mss_sw_config.h */
+STACK_SIZE_PER_HART = 8k;    
 
 /*
  * There is common area for shared variables, accessed from a pointer in a harts HLS
  */
 SIZE_OF_COMMON_HART_MEM = 4k;
 
-/* 
- * The stack size needs to be calculated for your application. It must be aligned.
- * Also Thread local storage (AKA hart local storage) is allocated for each hart 
- * as part of the stack. 
- * So the memory map will look like once apportion in startup code:              
- * stack hart0    
- * HLS hart 0                                                                    
- * stack hart1                                                                   
- * HLS hart 1                                                                    
- * etc                                                                           
- * Actual Stack size per hart = (STACK_SIZE_PER_HART - HLS_DEBUG_AREA_SIZE)                                                                 
- * note: HLS_DEBUG_AREA_SIZE is defined in mss_sw_config.h                       
- */
- 
 /*
- * STACK_SIZE_xxx_STARTUP
- * Stack size for each hart's startup code.
- * Before copying itself to the scratchpad memory area and executing the code from there, the 
- * startup code is executing from LIM. The scratchpad area is not configured yet. This per-hart 
- * startup stack area is located in LIM and used during this phase of the startup code.
- *
- */
-STACK_SIZE_E51_STARTUP = 4k;
-STACK_SIZE_U54_1_STARTUP = 4k;
-STACK_SIZE_U54_2_STARTUP = 4k;
-STACK_SIZE_U54_3_STARTUP = 4k;
-STACK_SIZE_U54_4_STARTUP = 4k;
-
-/*
- * STACK_SIZE_xxx_APPLICATION
- * After the startup code executing from LIM configures the scratchpad memory, it configures 
- * the each hart's SP with this stack area for the respective hart's application function, 
- * (namely e51(), u54_1(), u54_2(), u54_3(), u54_4() ) to use it.
- * This per-hart application stack area is located in scratchpad and used by application when 
- * it is executing from scratchpad.
+ * Stack size for each hart's application.
+ * These are the stack sizes that will be allocated to each hart before starting
+ * each hart's application function, e51(), u54_1(), u54_2(), u54_3(), u54_4().
  */
 STACK_SIZE_E51_APPLICATION = 8k;
 STACK_SIZE_U54_1_APPLICATION = 8k;
 STACK_SIZE_U54_2_APPLICATION = 8k;
 STACK_SIZE_U54_3_APPLICATION = 8k;
 STACK_SIZE_U54_4_APPLICATION = 8k;
-
 
 SECTIONS
 {
@@ -147,24 +132,13 @@ SECTIONS
     PROVIDE(__u54_4_itim_end = ORIGIN(u54_4_itim) + LENGTH(u54_4_itim));
     
     . = __envm_start;
-    .text_init : ALIGN(0x10)
-    {
-        *(.text.init)
-        *system_startup.o (.text .text* .rodata .rodata* .srodata*)
-        *mtrap.o (.text .text* .rodata .rodata* .srodata*)
-        *mss_h2f.o (.text .text* .rodata .rodata* .srodata*)
-        *mss_l2_cache.o (.text .text* .rodata .rodata* .srodata*)
-        . = ALIGN(0x10);
-    } >envm 
-  
     .text : ALIGN(0x10)
     {
         __text_load = LOADADDR(.text);
+        __text_start = .; 
+        *(.text.init)
+        /*  *entry.o(.text); */
         . = ALIGN(0x10);
-        __text_start = .;
-        /* placed at the start of used scratchpad, used as check to verify enough available in code */
-        __l2_scratchpad_vma_start = .; 
-        
         *(.text .text.* .gnu.linkonce.t.*)
         *(.plt)
         . = ALIGN(0x10);
@@ -198,14 +172,61 @@ SECTIONS
         KEEP (*(.fini_array))
         KEEP (*(SORT(.fini_array.*)))
         PROVIDE_HIDDEN (__fini_array_end = .);
-
+        
         *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2)
         *(.srodata*)
-
+        
         . = ALIGN(0x10);
         __text_end = .;
+    } > envm
+
+    .l2_scratchpad : ALIGN(0x10)
+    { 
+        __l2_scratchpad_load = LOADADDR(.l2_scratchpad);
+        __l2_scratchpad_start = .;
+        __l2_scratchpad_vma_start = .; 
+        *(.l2_scratchpad)
+        . = ALIGN(0x10);
+        __l2_scratchpad_end = .;
+        __l2_scratchpad_vma_end = .;
     } >scratchpad AT> envm
+  
+    /* 
+     *   The .ram_code section will contain the code that is run from RAM.
+     *   We are using this code to switch the clocks including envm clock.
+     *   This can not be done when running from envm
+     *   This will need to be copied to ram, before any of this code is run.
+     */
+    .ram_code :
+    {
+        . = ALIGN (4);
+        __sc_load = LOADADDR (.ram_code);
+        __sc_start = .;
+        *(.ram_codetext)        /* .ram_codetext sections (code) */
+        *(.ram_codetext*)       /* .ram_codetext* sections (code)  */
+        *(.ram_coderodata)      /* read-only data (constants) */
+        *(.ram_coderodata*)
+        . = ALIGN (4);
+        __sc_end = .;
+    } >switch_code_dtim AT>envm
     
+    /* 
+    *   The .ddr_code section will contain the code that is run from DDR.
+    *   This is to verify DDR working as expeted
+    */
+    .ddr_code :
+    {
+        . = ALIGN (4);
+        __ddr_load = LOADADDR (.ram_code);
+        __ddr_start = .;
+        *(.ddr_codetext)        /* .ram_codetext sections (code) */
+        *(.ddr_codetext*)       /* .ram_codetext* sections (code)  */
+        *(.ddr_coderodata)      /* read-only data (constants) */
+        *(.ddr_coderodata*)
+        . = ALIGN (4);
+        __ddr_end = .;
+    } >ddr_cached_32bit AT>envm
+
     /* short/global data section */
     .sdata : ALIGN(0x10)
     {
@@ -219,8 +240,8 @@ SECTIONS
         *(.sdata .sdata.* .gnu.linkonce.s.*)
         . = ALIGN(0x10);
         __sdata_end = .;
-    } >scratchpad AT> envm
-  
+    } > l2lim AT > envm
+    
     /* data section */
     .data : ALIGN(0x10)
     { 
@@ -231,7 +252,7 @@ SECTIONS
         *(.data .data.* .gnu.linkonce.d.*)
         . = ALIGN(0x10);
         __data_end = .;
-    } > scratchpad AT> envm
+    } > l2lim AT > envm
 
     /* sbss section */
     .sbss : ALIGN(0x10)
@@ -241,7 +262,7 @@ SECTIONS
         *(.scommon)
         . = ALIGN(0x10);
         __sbss_end = .;
-    } > scratchpad
+    } > l2lim
   
     /* sbss section */
     .bss : ALIGN(0x10)
@@ -252,7 +273,7 @@ SECTIONS
         *(COMMON)
         . = ALIGN(0x10);
         __bss_end = .;
-    } > scratchpad
+    } > l2lim
 
     /* End of uninitialized data segment */
     _end = .;
@@ -264,89 +285,48 @@ SECTIONS
         __heap_end = .;
         . = ALIGN(0x10);
         _heap_end = __heap_end;
-    } > scratchpad
-  
-    /* must be on 4k boundary- corresponds to page size */
-    .stack_e51 : /* ALIGN(0x1000) */
+    } > l2lim
+   
+    /* must be on 4k boundary (0x1000) - corresponds to page size, when using 
+       memory mem */
+    /* protection */
+    /* .stack : ALIGN(0x1000) */
+    .stack : ALIGN(0x10)
     {
         PROVIDE(__stack_bottom_h0$ = .);
-        . += STACK_SIZE_E51_STARTUP;
-        PROVIDE(__stack_top_h0$ = .);
-    } > l2lim
-
-    /* must be on 4k boundary- corresponds to page size */
-    .stack_u54_1 : /* ALIGN(0x1000) */
-    {
-        PROVIDE(__stack_bottom_h1$ = .);
-        . += STACK_SIZE_U54_1_STARTUP;
-        PROVIDE(__stack_top_h1$ = .);
-    } > l2lim
-
-    /* must be on 4k boundary- corresponds to page size */
-    .stack_u54_2 : /* ALIGN(0x1000) */
-    {
-        PROVIDE(__stack_bottom_h2$ = .);
-        . += STACK_SIZE_U54_2_STARTUP;
-        PROVIDE(__stack_top_h2$ = .);
-    } > l2lim
-    
-    /*  */
-    .stack_u54_3 : /* ALIGN(0x1000) */
-    {
-        PROVIDE(__stack_bottom_h3$ = .);
-         . += STACK_SIZE_U54_3_STARTUP;
-         PROVIDE(__stack_top_h3$ = .);
-    } > l2lim
-
-    /*  */
-    .stack_u54_4 : /* ALIGN(0x1000) */
-    {
-        PROVIDE(__stack_bottom_h4$ = .);
-        . += STACK_SIZE_U54_4_STARTUP;
-        PROVIDE(__stack_top_h4$ = .);
-    } > l2lim
-    /* application stacks defined below here */
-
-    /* must be on 4k boundary- corresponds to page size */
-    .app_stack_e51 : /* ALIGN(0x1000) */
-    {
         PROVIDE(__app_stack_bottom_h0 = .);
         . += STACK_SIZE_E51_APPLICATION;
         PROVIDE(__app_stack_top_h0 = .);
-    } > scratchpad
-
-    /* must be on 4k boundary- corresponds to page size */
-    .app_stack_u54_1 : /* ALIGN(0x1000) */
-    {
+        PROVIDE(__stack_top_h0$ = .);
+    
+        PROVIDE(__stack_bottom_h1$ = .);
         PROVIDE(__app_stack_bottom_h1$ = .);
         . += STACK_SIZE_U54_1_APPLICATION;
         PROVIDE(__app_stack_top_h1 = .);
-    } > scratchpad
-
-    /*  */
-    .app_stack_u54_2 : /* ALIGN(0x1000) */
-    {
+        PROVIDE(__stack_top_h1$ = .);
+    
+        PROVIDE(__stack_bottom_h2$ = .);
         PROVIDE(__app_stack_bottom_h2 = .);
         . += STACK_SIZE_U54_2_APPLICATION;
         PROVIDE(__app_stack_top_h2 = .);
-    } > scratchpad
-
-    /*  */
-    .app_stack_u54_3 : /* ALIGN(0x1000) */
-    {
+        PROVIDE(__stack_top_h2$ = .);
+    
+        PROVIDE(__stack_bottom_h3$ = .);
         PROVIDE(__app_stack_bottom_h3 = .);
         . += STACK_SIZE_U54_3_APPLICATION;
         PROVIDE(__app_stack_top_h3 = .);
-    } > scratchpad
-
-    /*  */
-    .app_stack_u54_4 : /* ALIGN(0x1000) */
-    {
+        PROVIDE(__stack_top_h3$ = .);
+    
+        PROVIDE(__stack_bottom_h4$ = .);
         PROVIDE(__app_stack_bottom_h4 = .);
         . += STACK_SIZE_U54_4_APPLICATION;
         PROVIDE(__app_stack_top_h4 = .);
-    } > scratchpad
-
+        PROVIDE(__stack_top_h4$ = .);
+        
+        /* place __start_of_free_lim$ after last allocation of l2_lim */
+        . = ALIGN(0x10);
+        PROVIDE(__start_of_free_lim$ = .);
+    } > l2lim
     
     /* 
      * memory shared accross harts. 
@@ -359,30 +339,19 @@ SECTIONS
         PROVIDE(__app_hart_common_start = .);
         . += SIZE_OF_COMMON_HART_MEM;
         PROVIDE(__app_hart_common_end = .);
-        /* place at the end of used scratchpad, used as check to verify enough available in code */
-        __l2_scratchpad_vma_end = .; 
-    } > scratchpad
+    } > l2lim
     
     /* 
-    *   The .ram_code section will contain the code That is run from RAM.
-    *   We are using this code to switch the clocks including envm clock.
-    *   This can not be done when running from envm
-    *   This will need to be copied to ram, before any of this code is run.
-    */
-    .ram_code : ALIGN(0x10)
+     * These are unused it the bootloader program but need to be preset for
+     * compilation, as used in non-bootloader function.
+     */
+    .unused_non_bootloader : ALIGN(0x10)
     {
-        . = ALIGN (4);
-        __sc_load = LOADADDR (.ram_code);
-        __sc_start = .;
-        *(.ram_codetext)        /* .ram_codetext sections (code) */
-        *(.ram_codetext*)       /* .ram_codetext* sections (code)  */
-        *(.ram_coderodata)      /* read-only data (constants) */
-        *(.ram_coderodata*)
-        . = ALIGN (4);
-        __sc_end = .;
-        /* place __start_of_free_lim$ after last allocation of l2lim */
-        PROVIDE(__start_of_free_lim$ = .);
-    } >switch_code_dtim AT> envm
+        PROVIDE(__uninit_bottom$ = .);
+        PROVIDE(__uninit_top_h$ = .);
+        PROVIDE(__app_stack_bottom = .);
+        PROVIDE(__app_stack_top = .);
+        PROVIDE(__uninit_top_h$ = .);
+    } > l2lim
 }
 
- 

@@ -418,6 +418,23 @@ clean:
 # Flashing Targets
 # ------------------------------------------------------------------------------
 
+program-job:
+	@echo "=================================================="
+	@echo " Programming FPGA Fabric with Job File"
+	@echo " Job File     : $(JOB_FILE)"
+	@echo " Target Board : $(BOARD)"
+	@echo "=================================================="
+	@if [ ! -f "$(JOB_FILE)" ]; then \
+		echo "[ERROR] Job file '$(JOB_FILE)' was not found!"; \
+		exit 1; \
+	fi
+	@mkdir -p $(BUILD_DIR)/fp_job
+	@echo "create_job_project -job_project_location {$(CURDIR)/$(BUILD_DIR)/fp_job} -job_file {$(CURDIR)/$(JOB_FILE)} -overwrite 1" > $(BUILD_DIR)/program_job.tcl
+	@echo "run_selected_actions" >> $(BUILD_DIR)/program_job.tcl
+	@echo "close_project" >> $(BUILD_DIR)/program_job.tcl
+	$(FPEXPRESS) SCRIPT:$(BUILD_DIR)/program_job.tcl
+
+
 program-envm:
 	@$(MAKE) BOARD=$(BOARD) BOARD_DIR=$(BOARD_DIR) MEM_TARGET=envm all
 	@echo "=================================================="
